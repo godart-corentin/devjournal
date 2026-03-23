@@ -32,7 +32,9 @@ fn init(conn: &Connection) -> Result<()> {
             repo_name TEXT,
             event_type TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            data TEXT NOT NULL
+            commit_hash TEXT,
+            data TEXT NOT NULL,
+            UNIQUE(repo_path, commit_hash)
         );
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
         CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repo_path);
@@ -58,14 +60,16 @@ pub struct Event {
 }
 
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
+    let commit_hash = event.data["hash"].as_str().map(|s| s.to_string());
     conn.execute(
-        "INSERT INTO events (repo_path, repo_name, event_type, timestamp, data)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR IGNORE INTO events (repo_path, repo_name, event_type, timestamp, commit_hash, data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             event.repo_path,
             event.repo_name,
             event.event_type,
             event.timestamp,
+            commit_hash,
             serde_json::to_string(&event.data)?
         ],
     )?;

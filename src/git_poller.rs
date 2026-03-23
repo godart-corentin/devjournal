@@ -84,7 +84,7 @@ fn collect_new_commits(
     stop_at_hash: Option<&str>,
 ) -> Result<Vec<CommitInfo>> {
     let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(Sort::TIME | Sort::REVERSE)?;
+    revwalk.set_sorting(Sort::TIME)?;
     revwalk.push(repo.revparse_single(head_hash)?.id())?;
 
     let mut commits = Vec::new();
@@ -165,7 +165,9 @@ mod tests {
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 repo_path TEXT NOT NULL, repo_name TEXT,
-                event_type TEXT NOT NULL, timestamp TEXT NOT NULL, data TEXT NOT NULL
+                event_type TEXT NOT NULL, timestamp TEXT NOT NULL,
+                commit_hash TEXT, data TEXT NOT NULL,
+                UNIQUE(repo_path, commit_hash)
             );
             CREATE TABLE IF NOT EXISTS poll_state (
                 repo_path TEXT PRIMARY KEY,
