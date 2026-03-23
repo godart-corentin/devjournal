@@ -16,7 +16,7 @@ The daemon and CLI share the same database directly — no IPC, no server proces
 
 | Purpose        | Path                                                      |
 | -------------- | --------------------------------------------------------- |
-| Config         | `~/.config/devjournal/config.toml` (macOS: `~/Library/Application Support/devjournal/config.toml`) |
+| Config         | `~/Library/Application Support/devjournal/config.toml` (macOS) / `~/.config/devjournal/config.toml` (Linux) |
 | Database       | `~/.local/share/devjournal/events.db`                     |
 | PID file       | `~/.local/share/devjournal/devjournal.pid`                |
 | Summaries      | `~/.local/share/devjournal/summaries/YYYY-MM-DD.md`       |
