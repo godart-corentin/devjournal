@@ -22,11 +22,6 @@ pub fn open() -> Result<Connection> {
     Ok(conn)
 }
 
-pub fn open_at(path: &PathBuf) -> Result<Connection> {
-    let conn = Connection::open(path)?;
-    init(&conn)?;
-    Ok(conn)
-}
 
 fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
@@ -111,6 +106,7 @@ pub fn get_events_for_date(conn: &Connection, date: &str) -> Result<Vec<Event>> 
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct PollState {
     pub last_commit_hash: Option<String>,
     pub last_branch: Option<String>,
