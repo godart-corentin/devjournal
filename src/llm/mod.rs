@@ -52,12 +52,13 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
 
     lines.push("Please write a daily work summary from the perspective of the developer who made these commits.".to_string());
     lines.push("Rules:".to_string());
-    lines.push("- Group entries by project (use the project names above as section headers with ## markdown)".to_string());
+    lines.push(format!("- Start the document with: # Dev Journal — {}", date));
+    lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
+    lines.push("- Preserve the chronological order of entries within each section (top = earliest, bottom = latest).".to_string());
     lines.push("- Write concise action-oriented bullet points describing what was done, fixed, tested, or shipped".to_string());
     lines.push("- Preserve ticket/issue references (e.g. TT-1234, PROJ-567) if present in commit messages".to_string());
     lines.push("- Do NOT mention branch names, file counts, or other git metadata".to_string());
     lines.push("- Do NOT add a reflections section or subjective commentary".to_string());
-    lines.push(format!("- Start the document with: # Dev Journal — {}", date));
 
     lines.join("\n")
 }
