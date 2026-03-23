@@ -47,6 +47,8 @@ enum Commands {
     Log {
         date: Option<String>,
     },
+    /// Print the path to the config file
+    Config,
 }
 
 #[derive(Subcommand)]
@@ -100,6 +102,10 @@ fn main() -> Result<()> {
 
         Some(Commands::Status) => {
             daemon::status()?;
+        }
+
+        Some(Commands::Config) => {
+            println!("{}", config::config_path().display());
         }
 
         Some(Commands::Log { date }) => {
