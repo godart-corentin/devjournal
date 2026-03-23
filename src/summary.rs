@@ -25,13 +25,18 @@ pub fn generate(date: &str, llm_config: &LlmConfig) -> Result<String> {
         ));
     }
 
-    let api_key = crate::config::api_key(llm_config)
-        .context("No API key found. Set DEVJOURNAL_API_KEY or add api_key to config.")?;
+    let api_key = if llm_config.provider == "ollama" {
+        String::new()
+    } else {
+        crate::config::api_key(llm_config)
+            .context("No API key found. Set DEVJOURNAL_API_KEY or add api_key to config.")?
+    };
 
     let backend = llm::make_backend(
         &llm_config.provider,
         &api_key,
         llm_config.model.as_deref(),
+        llm_config.base_url.as_deref(),
     );
 
     let summary = backend.summarize(&events, date)?;

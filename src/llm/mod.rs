@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod openai;
+pub mod ollama;
 
 use anyhow::Result;
 use crate::db::Event;
@@ -8,11 +9,15 @@ pub trait LlmBackend {
     fn summarize(&self, events: &[Event], date: &str) -> Result<String>;
 }
 
-pub fn make_backend(provider: &str, api_key: &str, model: Option<&str>) -> Box<dyn LlmBackend> {
+pub fn make_backend(provider: &str, api_key: &str, model: Option<&str>, base_url: Option<&str>) -> Box<dyn LlmBackend> {
     match provider {
         "openai" => Box::new(openai::OpenAiBackend {
             api_key: api_key.to_string(),
             model: model.unwrap_or("gpt-4o").to_string(),
+        }),
+        "ollama" => Box::new(ollama::OllamaBackend {
+            base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
+            model: model.unwrap_or("llama3.2").to_string(),
         }),
         _ => Box::new(claude::ClaudeBackend {
             api_key: api_key.to_string(),

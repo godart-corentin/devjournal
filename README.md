@@ -47,9 +47,23 @@ devjournal add /path/to/your/repo --name my-project
 
 This creates the config file on first run. You can add as many repos as you like.
 
-**2. Set your API key:**
+**2. Set your LLM provider:**
 
-Either export it in your shell:
+**Ollama (free, local)** — no API key needed. [Install Ollama](https://ollama.com), pull a model, then configure devjournal to use it:
+
+```bash
+ollama pull llama3.2
+```
+
+```toml
+# in your config.toml
+[llm]
+provider = "ollama"
+model = "llama3.2"       # any model you have pulled
+# base_url = "http://localhost:11434"  # default, change for remote instances
+```
+
+**Claude or OpenAI** — requires an API key. Export it in your shell:
 
 ```bash
 export DEVJOURNAL_API_KEY=sk-ant-...
@@ -99,9 +113,10 @@ The config file is TOML. It is created automatically the first time you run `dev
 poll_interval_secs = 60   # How often the daemon polls each repo
 
 [llm]
-provider = "claude"       # "claude" or "openai"
-api_key = "sk-ant-..."    # Optional — prefer DEVJOURNAL_API_KEY env var
+provider = "claude"       # "claude", "openai", or "ollama"
+api_key = "sk-ant-..."    # Optional — prefer DEVJOURNAL_API_KEY env var. Not needed for ollama.
 model = "claude-sonnet-4-6"  # Optional — defaults per provider shown below
+# base_url = "http://localhost:11434"  # Ollama only
 
 [[repos]]
 path = "/Users/tylia/workspace/perso/dev-journal"
@@ -117,7 +132,8 @@ name = "my-api"
 | `poll_interval_secs`  | `60`                 | Minimum effective value is 1                      |
 | `llm.provider`        | `"claude"`           | `"claude"` or `"openai"`                         |
 | `llm.model`           | `claude-sonnet-4-6`  | For OpenAI: defaults to `gpt-4o`                 |
-| `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence     |
+| `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama. |
+| `llm.base_url`        | `http://localhost:11434` | Ollama only — change for remote instances     |
 | `repos[].name`        | —                    | Falls back to the full path if not set            |
 
 ### First poll behaviour
@@ -169,3 +185,6 @@ If the process died without cleaning up its PID file, `daemon start` will detect
 
 **Config file not found?**
 Run `devjournal add <path>` — this creates the config file with defaults if it does not exist yet.
+
+**Ollama: "Failed to call Ollama API"?**
+Ollama must be running before you generate a summary. Start it with `ollama serve`, then verify the model is pulled: `ollama list`. If you are running Ollama on a different machine, set `base_url` in your config to point at it.
