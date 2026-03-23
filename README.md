@@ -97,6 +97,8 @@ devjournal today
 | `devjournal today`               | Generate and print today's summary                       |
 | `devjournal summary [YYYY-MM-DD]`| Generate and print the summary for a specific date       |
 | `devjournal log [YYYY-MM-DD]`    | Show raw recorded events (useful for debugging)          |
+| `devjournal list`                | List all watched repositories                            |
+| `devjournal config`              | Print the path to the config file                        |
 
 The `add` command accepts an optional `--name` flag to give the repo a display name used in summaries:
 
