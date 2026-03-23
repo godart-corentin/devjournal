@@ -49,6 +49,8 @@ enum Commands {
     },
     /// Print the path to the config file
     Config,
+    /// List all watched repositories
+    List,
 }
 
 #[derive(Subcommand)]
@@ -106,6 +108,17 @@ fn main() -> Result<()> {
 
         Some(Commands::Config) => {
             println!("{}", config::config_path().display());
+        }
+
+        Some(Commands::List) => {
+            let config = config::load_or_default();
+            if config.repos.is_empty() {
+                println!("No repos configured. Use `devjournal add <path>` to add one.");
+            } else {
+                for repo in &config.repos {
+                    println!("{} ({})", repo.display_name(), repo.path);
+                }
+            }
         }
 
         Some(Commands::Log { date }) => {
