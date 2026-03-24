@@ -14,10 +14,11 @@ pub struct Config {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GeneralConfig {
     pub poll_interval_secs: u64,
+    pub author: Option<String>,
 }
 
 fn default_general() -> GeneralConfig {
-    GeneralConfig { poll_interval_secs: 60 }
+    GeneralConfig { poll_interval_secs: 60, author: None }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::Local;
 use git2::{Repository, Sort};
 use rusqlite::Connection;
 use serde_json::json;
@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::config::RepoConfig;
 use crate::db::{self, Event};
 
-pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection) -> Result<usize> {
+pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
     let repo = Repository::open(&repo_config.path)
         .with_context(|| format!("Cannot open git repo at {}", repo_config.path))?;
 
@@ -41,10 +41,16 @@ pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection) -> Result<usize> {
             .collect()
     };
 
-    let count = new_commits.len();
-    let now = Utc::now().to_rfc3339();
+    let now = Local::now().to_rfc3339();
 
+    let mut count = 0;
     for commit_info in new_commits {
+        if let Some(author) = author_filter {
+            if commit_info.author != author {
+                continue;
+            }
+        }
+        count += 1;
         let event = Event {
             id: None,
             repo_path: repo_config.path.clone(),
@@ -97,10 +103,17 @@ fn collect_new_commits(
             }
         }
         let commit = repo.find_commit(oid)?;
+
+        // Skip merge commits (more than one parent)
+        if commit.parent_count() > 1 {
+            continue;
+        }
+
         let author = commit.author().name().unwrap_or("Unknown").to_string();
         let message = commit.summary().unwrap_or("").to_string();
         let timestamp = chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
-            .unwrap_or_else(chrono::Utc::now)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(Local::now)
             .to_rfc3339();
 
         let (files_changed, insertions, deletions) = diff_stats(repo, &commit);
@@ -189,7 +202,7 @@ mod tests {
             path: dir.path().to_string_lossy().to_string(),
             name: None,
         };
-        let result = poll_repo(&repo_config, &conn).unwrap();
+        let result = poll_repo(&repo_config, &conn, None).unwrap();
         assert_eq!(result, 0);
     }
 
@@ -204,10 +217,10 @@ mod tests {
             path: dir.path().to_string_lossy().to_string(),
             name: Some("test-repo".to_string()),
         };
-        let count = poll_repo(&repo_config, &conn).unwrap();
+        let count = poll_repo(&repo_config, &conn, None).unwrap();
         assert_eq!(count, 1);
 
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let events = db::get_events_for_date(&conn, &today).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data["message"], "Initial commit");
@@ -224,8 +237,8 @@ mod tests {
             path: dir.path().to_string_lossy().to_string(),
             name: None,
         };
-        poll_repo(&repo_config, &conn).unwrap(); // first poll
-        let count = poll_repo(&repo_config, &conn).unwrap(); // second poll - no new commits
+        poll_repo(&repo_config, &conn, None).unwrap(); // first poll
+        let count = poll_repo(&repo_config, &conn, None).unwrap(); // second poll - no new commits
         assert_eq!(count, 0);
     }
 }

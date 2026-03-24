@@ -109,6 +109,12 @@ pub fn run_daemon_loop() -> Result<()> {
     eprintln!("[devjournal daemon] started with PID {}", pid);
 
     let config = config::load_or_default();
+
+    if config.general.author.is_none() {
+        eprintln!("[devjournal daemon] error: no author configured. Set `author` in [general] config.");
+        std::process::exit(1);
+    }
+
     let poll_interval = Duration::from_secs(config.general.poll_interval_secs);
 
     while !SHOULD_STOP.load(Ordering::SeqCst) {
@@ -116,7 +122,7 @@ pub fn run_daemon_loop() -> Result<()> {
             Ok(conn) => {
                 let cfg = config::load_or_default();
                 for repo in &cfg.repos {
-                    match git_poller::poll_repo(repo, &conn) {
+                    match git_poller::poll_repo(repo, &conn, cfg.general.author.as_deref()) {
                         Ok(0) => {}
                         Ok(n) => eprintln!("[devjournal daemon] {} new commit(s) from {}", n, repo.display_name()),
                         Err(e) => eprintln!("[devjournal daemon] error polling {}: {}", repo.display_name(), e),
