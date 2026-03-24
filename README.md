@@ -47,7 +47,18 @@ devjournal add /path/to/your/repo --name my-project
 
 This creates the config file on first run. You can add as many repos as you like.
 
-**2. Set your LLM provider:**
+**2. Set your author name:**
+
+Add your git author name to the config so the daemon only records your own commits:
+
+```toml
+[general]
+author = "Your Name"   # must match your git author name exactly
+```
+
+The daemon will refuse to start if this is not set.
+
+**3. Set your LLM provider:**
 
 **Ollama (free, local)** — no API key needed. [Install Ollama](https://ollama.com), pull a model, then configure devjournal to use it:
 
@@ -71,7 +82,7 @@ export DEVJOURNAL_API_KEY=sk-ant-...
 
 Or add it to the config file (see [Configuration](#configuration)).
 
-**3. Start the daemon:**
+**4. Start the daemon:**
 
 ```bash
 devjournal daemon start
@@ -79,7 +90,7 @@ devjournal daemon start
 
 The daemon runs in the background and polls all configured repos on the interval set in your config. Its PID is written to the PID file so `stop` and `status` can find it.
 
-**4. Generate today's summary:**
+**5. Generate today's summary:**
 
 ```bash
 devjournal today
@@ -113,6 +124,7 @@ The config file is TOML. It is created automatically the first time you run `dev
 ```toml
 [general]
 poll_interval_secs = 60   # How often the daemon polls each repo
+author = "Your Name"      # Required — only commits by this author are recorded
 
 [llm]
 provider = "claude"       # "claude", "openai", or "ollama"
@@ -132,6 +144,7 @@ name = "my-api"
 | Setting               | Default              | Notes                                             |
 | --------------------- | -------------------- | ------------------------------------------------- |
 | `poll_interval_secs`  | `60`                 | Minimum effective value is 1                      |
+| `author`              | —                    | **Required.** Must match your git author name exactly. Daemon refuses to start without it. |
 | `llm.provider`        | `"claude"`           | `"claude"` or `"openai"`                         |
 | `llm.model`           | `claude-sonnet-4-6`  | For OpenAI: defaults to `gpt-4o`                 |
 | `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama. |
@@ -187,6 +200,9 @@ If the process died without cleaning up its PID file, `daemon start` will detect
 
 **Config file not found?**
 Run `devjournal add <path>` — this creates the config file with defaults if it does not exist yet.
+
+**"no author configured" error on daemon start?**
+Add your git author name to `[general]` in the config file: `author = "Your Name"`. It must match your git author name exactly (check with `git log --format='%an' | head -1`).
 
 **Ollama: "Failed to call Ollama API"?**
 Ollama must be running before you generate a summary. Start it with `ollama serve`, then verify the model is pulled: `ollama list`. If you are running Ollama on a different machine, set `base_url` in your config to point at it.
