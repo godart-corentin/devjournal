@@ -50,14 +50,18 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
         lines.push(String::new());
     }
 
-    lines.push("Please write a daily work summary from the perspective of the developer who made these commits.".to_string());
+    lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
+    lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
     lines.push("Rules:".to_string());
     lines.push(format!("- Start the document with: # Dev Journal — {}", date));
     lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
-    lines.push("- Preserve the chronological order of entries within each section (top = earliest, bottom = latest).".to_string());
-    lines.push("- Write concise action-oriented bullet points describing what was done, fixed, tested, or shipped".to_string());
+    lines.push("- STRICT ATTRIBUTION: each bullet must only describe commits listed under that specific project. Never move, copy, or infer work across project sections. A ticket number appearing in multiple projects must be described independently in each.".to_string());
+    lines.push("- Each project section should have 1-3 bullets max. Merge related commits aggressively.".to_string());
+    lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
+    lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
+    lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
     lines.push("- Preserve ticket/issue references (e.g. TT-1234, PROJ-567) if present in commit messages".to_string());
-    lines.push("- Do NOT mention branch names, file counts, or other git metadata".to_string());
+    lines.push("- Do NOT mention branch names, file counts, commit hashes, or other git metadata".to_string());
     lines.push("- Do NOT add a reflections section or subjective commentary".to_string());
 
     lines.join("\n")
@@ -106,6 +110,8 @@ mod tests {
         let events = vec![make_event("proj", "commit msg", "main")];
         let prompt = build_prompt(&events, "2026-03-23");
         assert!(prompt.contains("Do NOT mention branch names"));
-        assert!(prompt.contains("action-oriented"));
+        assert!(prompt.contains("OUTCOMES"));
+        assert!(prompt.contains("standup"));
+        assert!(prompt.contains("ticket ID"));
     }
 }
