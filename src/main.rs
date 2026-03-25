@@ -95,6 +95,8 @@ enum Commands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Run diagnostic checks on your devjournal setup
+    Doctor,
     /// Sync all git history for watched repos into the database
     Sync {
         /// Name or path of a specific repo to sync (syncs all if omitted)
@@ -230,6 +232,93 @@ fn main() -> Result<()> {
                 print!("Syncing {}... ", repo_config.display_name());
                 let count = git_poller::sync_repo(repo_config, &conn, author)?;
                 println!("{} commit(s) added", count);
+            }
+        }
+
+        Some(Commands::Doctor) => {
+            let mut issues = 0u32;
+
+            // 1. Config
+            print!("Config file... ");
+            match config::load() {
+                Ok(cfg) => {
+                    println!("OK ({})", config::config_path().display());
+
+                    // 2. Author
+                    print!("Author... ");
+                    match &cfg.general.author {
+                        Some(author) => println!("OK (\"{}\")", author),
+                        None => {
+                            println!("MISSING — set [general] author in config");
+                            issues += 1;
+                        }
+                    }
+
+                    // 3. LLM API key
+                    print!("LLM API key... ");
+                    if cfg.llm.provider == "ollama" {
+                        println!("SKIPPED (ollama does not need a key)");
+                    } else if config::api_key(&cfg.llm).is_some() {
+                        println!("OK");
+                    } else {
+                        println!(
+                            "MISSING — set DEVJOURNAL_API_KEY or api_key in config for {}",
+                            cfg.llm.provider
+                        );
+                        issues += 1;
+                    }
+
+                    // 4. Repos
+                    if cfg.repos.is_empty() {
+                        println!("Repos... NONE configured — use `devjournal add <path>`");
+                        issues += 1;
+                    } else {
+                        for repo in &cfg.repos {
+                            print!("Repo {}... ", repo.display_name());
+                            let p = std::path::Path::new(&repo.path);
+                            if !p.exists() {
+                                println!("MISSING — path does not exist");
+                                issues += 1;
+                            } else if git2::Repository::open(&repo.path).is_err() {
+                                println!("NOT A GIT REPO");
+                                issues += 1;
+                            } else {
+                                println!("OK");
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("MISSING — run `devjournal init`");
+                    issues += 1;
+                }
+            }
+
+            // 5. Database
+            print!("Database... ");
+            match db::open() {
+                Ok(_) => println!("OK ({})", db::db_path().display()),
+                Err(e) => {
+                    println!("ERROR — {}", e);
+                    issues += 1;
+                }
+            }
+
+            // 6. Daemon
+            print!("Daemon... ");
+            match daemon::read_pid_public() {
+                Ok(Some(pid)) => println!("RUNNING (PID: {})", pid),
+                Ok(None) => println!("NOT RUNNING"),
+                Err(_) => {
+                    println!("UNKNOWN (could not read PID file)");
+                    issues += 1;
+                }
+            }
+
+            if issues == 0 {
+                println!("\nAll checks passed.");
+            } else {
+                println!("\n{} issue(s) found.", issues);
             }
         }
 

@@ -338,6 +338,13 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> i32 {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+pub fn read_pid_public() -> Result<Option<u32>> {
+    match read_pid()? {
+        Some(pid) if is_process_alive(pid) => Ok(Some(pid)),
+        _ => Ok(None),
+    }
+}
+
 fn read_pid() -> Result<Option<u32>> {
     let path = pid_path();
     if !path.exists() {
