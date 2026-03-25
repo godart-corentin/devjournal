@@ -301,6 +301,14 @@ pub fn search_events(
     Ok(events)
 }
 
+pub fn prune_events_before(conn: &Connection, before_date: &str) -> Result<usize> {
+    let deleted = conn.execute(
+        "DELETE FROM events WHERE date(timestamp) < ?1",
+        params![before_date],
+    )?;
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +481,37 @@ mod tests {
         // Search with wrong repo filter — no match
         let results = search_events(&conn, "auth", Some("beta"), 50).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_prune_events_before_date() {
+        let conn = test_conn();
+        let old = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2025-01-01T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "old1", "message": "old commit"}),
+        };
+        let recent = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "new1", "message": "recent commit"}),
+        };
+        insert_event(&conn, &old).unwrap();
+        insert_event(&conn, &recent).unwrap();
+
+        let deleted = prune_events_before(&conn, "2026-01-01").unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining = get_events_for_date(&conn, "2026-03-25").unwrap();
+        assert_eq!(remaining.len(), 1);
+        let gone = get_events_for_date(&conn, "2025-01-01").unwrap();
+        assert_eq!(gone.len(), 0);
     }
 
     #[test]

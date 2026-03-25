@@ -216,6 +216,21 @@ pub fn run_daemon_loop() -> Result<()> {
                         ),
                     }
                 }
+
+                if let Some(retention_days) = cfg.general.retention_days {
+                    let cutoff = (chrono::Local::now()
+                        - chrono::Duration::days(retention_days as i64))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                    match db::prune_events_before(&conn, &cutoff) {
+                        Ok(0) => {}
+                        Ok(n) => eprintln!(
+                            "[devjournal daemon] pruned {} old event(s) (before {})",
+                            n, cutoff
+                        ),
+                        Err(e) => eprintln!("[devjournal daemon] prune error: {}", e),
+                    }
+                }
             }
             Err(e) => eprintln!("[devjournal daemon] DB error: {}", e),
         }

@@ -15,12 +15,14 @@ pub struct Config {
 pub struct GeneralConfig {
     pub poll_interval_secs: u64,
     pub author: Option<String>,
+    pub retention_days: Option<u32>,
 }
 
 fn default_general() -> GeneralConfig {
     GeneralConfig {
         poll_interval_secs: 60,
         author: None,
+        retention_days: None,
     }
 }
 
@@ -156,6 +158,7 @@ pub fn build_config(
         general: GeneralConfig {
             poll_interval_secs: 60,
             author,
+            retention_days: None,
         },
         llm: LlmConfig {
             provider: provider.to_string(),

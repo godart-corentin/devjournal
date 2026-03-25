@@ -100,6 +100,11 @@ enum Commands {
         /// Shell to generate completions for (bash, zsh, fish, elvish)
         shell: clap_complete::Shell,
     },
+    /// Delete events older than a given number of days
+    Prune {
+        /// Number of days to keep (events older than this are deleted)
+        days: u32,
+    },
     /// Run diagnostic checks on your devjournal setup
     Doctor,
     /// Sync all git history for watched repos into the database
@@ -243,6 +248,18 @@ fn main() -> Result<()> {
         Some(Commands::Completions { shell }) => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "devjournal", &mut std::io::stdout());
+        }
+
+        Some(Commands::Prune { days }) => {
+            let cutoff = (chrono::Local::now() - chrono::Duration::days(days as i64))
+                .format("%Y-%m-%d")
+                .to_string();
+            let conn = db::open()?;
+            let deleted = db::prune_events_before(&conn, &cutoff)?;
+            println!(
+                "Pruned {} event(s) older than {} days (before {})",
+                deleted, days, cutoff
+            );
         }
 
         Some(Commands::Doctor) => {
