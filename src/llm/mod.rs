@@ -32,10 +32,19 @@ pub fn make_backend(
 }
 
 pub fn build_prompt(events: &[Event], date: &str) -> String {
-    let mut lines = vec![
-        format!("Here are all git commits recorded on {}:", date),
-        String::new(),
-    ];
+    let is_range = date.contains(" to ");
+
+    let mut lines = if is_range {
+        vec![
+            format!("Here are all git commits recorded from {}:", date),
+            String::new(),
+        ]
+    } else {
+        vec![
+            format!("Here are all git commits recorded on {}:", date),
+            String::new(),
+        ]
+    };
 
     // Group by repo
     let mut repos: std::collections::BTreeMap<String, Vec<&Event>> = Default::default();
@@ -55,8 +64,13 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
         lines.push(String::new());
     }
 
-    lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
-    lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
+    if is_range {
+        lines.push("Please write a multi-day summary from the perspective of the developer who made these commits.".to_string());
+        lines.push("This covers multiple days — highlight key outcomes and progress across the period.".to_string());
+    } else {
+        lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
+        lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
+    }
     lines.push("Rules:".to_string());
     lines.push(format!(
         "- Start the document with: # Dev Journal — {}",
@@ -64,10 +78,15 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
     ));
     lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
     lines.push("- STRICT ATTRIBUTION: each bullet must only describe commits listed under that specific project. Never move, copy, or infer work across project sections. A ticket number appearing in multiple projects must be described independently in each.".to_string());
-    lines.push(
-        "- Each project section should have 1-3 bullets max. Merge related commits aggressively."
-            .to_string(),
-    );
+    if is_range {
+        lines.push("- Each project section should have 1-5 bullets (scale with the number of days). Merge closely related commits.".to_string());
+        lines.push("- Within each project section, organize bullets chronologically.".to_string());
+    } else {
+        lines.push(
+            "- Each project section should have 1-3 bullets max. Merge related commits aggressively."
+                .to_string(),
+        );
+    }
     lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
     lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
     lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());

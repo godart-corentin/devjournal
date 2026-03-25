@@ -63,6 +63,53 @@ pub fn generate(date: &str, llm_config: &LlmConfig, force: bool) -> Result<Strin
     Ok(summary)
 }
 
+pub fn generate_range(from: &str, to: &str, llm_config: &LlmConfig, force: bool) -> Result<String> {
+    let conn = db::open()?;
+    let events = db::get_events_for_range(&conn, from, to)?;
+    let date_label = format!("{} to {}", from, to);
+
+    if events.is_empty() {
+        return Ok(format!(
+            "# Dev Journal — {}\n\nNo activity recorded for this period.\n",
+            date_label
+        ));
+    }
+
+    let fingerprint = db::compute_events_fingerprint(&events);
+    let cached_path = summaries_dir().join(format!("{}_to_{}.md", from, to));
+
+    if !force {
+        if let Ok(cached) = std::fs::read_to_string(&cached_path) {
+            if parse_cached_fingerprint(&cached).as_deref() == Some(fingerprint.as_str()) {
+                let body = cached.lines().skip(1).collect::<Vec<_>>().join("\n");
+                return Ok(body);
+            }
+        }
+    }
+
+    let api_key = if llm_config.provider == "ollama" {
+        String::new()
+    } else {
+        crate::config::api_key(llm_config)
+            .context("No API key found. Set DEVJOURNAL_API_KEY or add api_key to config.")?
+    };
+
+    let backend = llm::make_backend(
+        &llm_config.provider,
+        &api_key,
+        llm_config.model.as_deref(),
+        llm_config.base_url.as_deref(),
+    );
+
+    let summary = backend.summarize(&events, &date_label)?;
+
+    std::fs::create_dir_all(summaries_dir())?;
+    let content = format!("<!-- fingerprint: {} -->\n{}", fingerprint, summary);
+    std::fs::write(&cached_path, &content)?;
+
+    Ok(summary)
+}
+
 pub fn today() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }

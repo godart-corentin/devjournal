@@ -174,6 +174,38 @@ pub fn compute_events_fingerprint(events: &[Event]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+pub fn get_events_for_range(conn: &Connection, from: &str, to: &str) -> Result<Vec<Event>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, repo_path, repo_name, event_type, timestamp, data
+         FROM events
+         WHERE date(timestamp) >= ?1 AND date(timestamp) <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+    let rows = stmt.query_map(params![from, to], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (id, repo_path, repo_name, event_type, timestamp, data_str) = row?;
+        events.push(Event {
+            id: Some(id),
+            repo_path,
+            repo_name,
+            event_type,
+            timestamp,
+            data: serde_json::from_str(&data_str)?,
+        });
+    }
+    Ok(events)
+}
+
 pub fn event_count_for_date_by_repo(conn: &Connection, repo_path: &str, date: &str) -> Result<i64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM events WHERE repo_path = ?1 AND timestamp LIKE ?2",

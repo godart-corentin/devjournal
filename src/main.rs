@@ -31,9 +31,22 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Generate and display summary for a specific date (YYYY-MM-DD)
+    /// Generate and display summary for a specific date or range
     Summary {
+        /// Date to summarise (YYYY-MM-DD). Omit to use today.
         date: Option<String>,
+        /// Start of date range (YYYY-MM-DD), used with --to
+        #[arg(long)]
+        from: Option<String>,
+        /// End of date range (YYYY-MM-DD), used with --from
+        #[arg(long)]
+        to: Option<String>,
+        /// Bypass cache and regenerate even if events haven't changed
+        #[arg(long)]
+        force: bool,
+    },
+    /// Generate a rolling 7-day summary (today minus 6 days through today)
+    Week {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
@@ -48,8 +61,17 @@ enum Commands {
     Remove { path: String },
     /// Show daemon status and watched repos
     Status,
-    /// Show raw events for today (for debugging)
-    Log { date: Option<String> },
+    /// Show raw events for a date or range (for debugging)
+    Log {
+        /// Date to show (YYYY-MM-DD). Omit to use today.
+        date: Option<String>,
+        /// Start of date range (YYYY-MM-DD), used with --to
+        #[arg(long)]
+        from: Option<String>,
+        /// End of date range (YYYY-MM-DD), used with --from
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Print the path to the config file
     Config,
     /// Initialize devjournal with guided setup
@@ -100,10 +122,36 @@ fn main() -> Result<()> {
             println!("{}", text);
         }
 
-        Some(Commands::Summary { date, force }) => {
-            let date = date.unwrap_or_else(summary::today);
+        Some(Commands::Summary { date, from, to, force }) => {
             let config = config::load()?;
-            let text = summary::generate(&date, &config.llm, force)?;
+            match (date, from, to) {
+                (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                    anyhow::bail!("Cannot combine a positional date with --from/--to");
+                }
+                (_, Some(from), to) => {
+                    let to = to.unwrap_or_else(summary::today);
+                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
+                    println!("{}", text);
+                }
+                (_, None, Some(_)) => {
+                    anyhow::bail!("--to requires --from");
+                }
+                (date, None, None) => {
+                    let date = date.unwrap_or_else(summary::today);
+                    let text = summary::generate(&date, &config.llm, force)?;
+                    println!("{}", text);
+                }
+            }
+        }
+
+        Some(Commands::Week { force }) => {
+            use chrono::Duration;
+            let to = summary::today();
+            let from = (chrono::Local::now() - Duration::days(6))
+                .format("%Y-%m-%d")
+                .to_string();
+            let config = config::load()?;
+            let text = summary::generate_range(&from, &to, &config.llm, force)?;
             println!("{}", text);
         }
 
@@ -167,12 +215,29 @@ fn main() -> Result<()> {
             }
         }
 
-        Some(Commands::Log { date }) => {
-            let date = date.unwrap_or_else(summary::today);
+        Some(Commands::Log { date, from, to }) => {
             let conn = db::open()?;
-            let events = db::get_events_for_date(&conn, &date)?;
+            let (events, label) = match (date, from, to) {
+                (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                    anyhow::bail!("Cannot combine a positional date with --from/--to");
+                }
+                (_, None, Some(_)) => {
+                    anyhow::bail!("--to requires --from");
+                }
+                (_, Some(from), to) => {
+                    let to = to.unwrap_or_else(summary::today);
+                    let label = format!("{} to {}", from, to);
+                    let events = db::get_events_for_range(&conn, &from, &to)?;
+                    (events, label)
+                }
+                (date, None, None) => {
+                    let date = date.unwrap_or_else(summary::today);
+                    let events = db::get_events_for_date(&conn, &date)?;
+                    (events, date)
+                }
+            };
             if events.is_empty() {
-                println!("No events recorded for {}", date);
+                println!("No events recorded for {}", label);
             } else {
                 for e in &events {
                     println!(
