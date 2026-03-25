@@ -226,6 +226,81 @@ pub fn get_latest_poll_time(conn: &Connection) -> Result<Option<String>> {
     }
 }
 
+pub fn search_events(
+    conn: &Connection,
+    keyword: &str,
+    repo_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Event>> {
+    let pattern = format!("%{}%", keyword);
+    let mut events = Vec::new();
+
+    match repo_filter {
+        Some(repo) => {
+            let mut stmt = conn.prepare(
+                "SELECT id, repo_path, repo_name, event_type, timestamp, data
+                 FROM events
+                 WHERE data LIKE ?1 AND (repo_name = ?2 OR repo_path = ?2)
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![pattern, repo, limit as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, repo_path, repo_name, event_type, timestamp, data_str) = row?;
+                events.push(Event {
+                    id: Some(id),
+                    repo_path,
+                    repo_name,
+                    event_type,
+                    timestamp,
+                    data: serde_json::from_str(&data_str)?,
+                });
+            }
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT id, repo_path, repo_name, event_type, timestamp, data
+                 FROM events
+                 WHERE data LIKE ?1
+                 ORDER BY timestamp DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, repo_path, repo_name, event_type, timestamp, data_str) = row?;
+                events.push(Event {
+                    id: Some(id),
+                    repo_path,
+                    repo_name,
+                    event_type,
+                    timestamp,
+                    data: serde_json::from_str(&data_str)?,
+                });
+            }
+        }
+    }
+
+    Ok(events)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +433,46 @@ mod tests {
         update_poll_state(&conn, "/repo/c", "h3", "main", "2026-03-25T08:00:00Z").unwrap();
         let result = get_latest_poll_time(&conn).unwrap();
         assert_eq!(result.as_deref(), Some("2026-03-25T10:30:00Z"));
+    }
+
+    #[test]
+    fn test_search_events_by_keyword() {
+        let conn = test_conn();
+        let e1 = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: Some("alpha".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-20T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "a1", "message": "Fix auth bug TT-1234"}),
+        };
+        let e2 = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: Some("alpha".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-21T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "a2", "message": "Add logging to API"}),
+        };
+        insert_event(&conn, &e1).unwrap();
+        insert_event(&conn, &e2).unwrap();
+
+        // Search for "auth" — should match e1 only
+        let results = search_events(&conn, "auth", None, 50).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data["hash"], "a1");
+
+        // Search for "TT-1234" — should match e1
+        let results = search_events(&conn, "TT-1234", None, 50).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search with repo filter
+        let results = search_events(&conn, "auth", Some("alpha"), 50).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Search with wrong repo filter — no match
+        let results = search_events(&conn, "auth", Some("beta"), 50).unwrap();
+        assert_eq!(results.len(), 0);
     }
 
     #[test]

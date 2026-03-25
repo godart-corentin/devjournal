@@ -84,6 +84,17 @@ enum Commands {
     Init,
     /// List all watched repositories
     List,
+    /// Search recorded events by keyword
+    Search {
+        /// Keyword to search for in commit messages
+        keyword: String,
+        /// Filter by repo name or path
+        #[arg(long)]
+        repo: Option<String>,
+        /// Maximum number of results (default: 20)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
     /// Sync all git history for watched repos into the database
     Sync {
         /// Name or path of a specific repo to sync (syncs all if omitted)
@@ -234,6 +245,28 @@ fn main() -> Result<()> {
                 for repo in &config.repos {
                     println!("{} ({})", repo.display_name(), repo.path);
                 }
+            }
+        }
+
+        Some(Commands::Search {
+            keyword,
+            repo,
+            limit,
+        }) => {
+            let conn = db::open()?;
+            let events = db::search_events(&conn, &keyword, repo.as_deref(), limit)?;
+            if events.is_empty() {
+                println!("No events matching \"{}\"", keyword);
+            } else {
+                for e in &events {
+                    println!(
+                        "[{}] {} — {}",
+                        &e.timestamp[..10],
+                        e.repo_name.as_deref().unwrap_or(&e.repo_path),
+                        e.data["message"].as_str().unwrap_or("?")
+                    );
+                }
+                println!("\n{} result(s)", events.len());
             }
         }
 
