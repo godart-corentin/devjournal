@@ -59,6 +59,8 @@ enum DaemonAction {
     Start,
     /// Stop the running daemon
     Stop,
+    /// Print the path to the daemon log file
+    Logs,
 }
 
 fn main() -> Result<()> {
@@ -78,6 +80,7 @@ fn main() -> Result<()> {
         Some(Commands::Daemon { action }) => match action {
             DaemonAction::Start => daemon::start()?,
             DaemonAction::Stop => daemon::stop()?,
+            DaemonAction::Logs => println!("{}", daemon::log_path().display()),
         },
 
         Some(Commands::Today) => {

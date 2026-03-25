@@ -11,6 +11,10 @@ pub fn pid_path() -> PathBuf {
     db::data_dir().join("devjournal.pid")
 }
 
+pub fn log_path() -> PathBuf {
+    db::data_dir().join("devjournal.log")
+}
+
 pub fn start() -> Result<()> {
     // Check if already running
     if let Some(pid) = read_pid()? {
@@ -24,11 +28,18 @@ pub fn start() -> Result<()> {
 
     // Spawn self in daemon mode
     let exe = std::env::current_exe().context("Cannot find current executable")?;
+    std::fs::create_dir_all(db::data_dir())?;
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+        .context("Failed to open daemon log file")?;
+
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("--daemon-mode")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(log_file);
 
     // On Windows, detach from the parent's console so the daemon outlives the terminal.
     // DETACHED_PROCESS removes the console association; CREATE_NO_WINDOW prevents a new
