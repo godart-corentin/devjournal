@@ -89,6 +89,9 @@ pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
     let canonical = std::fs::canonicalize(path)
         .with_context(|| format!("Path does not exist: {}", path))?;
     let path_str = canonical.to_string_lossy().to_string();
+    // Strip Windows extended-length path prefix (\\?\) which canonicalize adds on Windows
+    #[cfg(windows)]
+    let path_str = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str).to_string();
     if config.repos.iter().any(|r| r.path == path_str) {
         println!("Repo already tracked: {}", path_str);
         return Ok(());
