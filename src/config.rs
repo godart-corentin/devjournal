@@ -18,7 +18,10 @@ pub struct GeneralConfig {
 }
 
 fn default_general() -> GeneralConfig {
-    GeneralConfig { poll_interval_secs: 60, author: None }
+    GeneralConfig {
+        poll_interval_secs: 60,
+        author: None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -58,8 +61,7 @@ pub fn load() -> Result<Config> {
     }
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config at {}", path.display()))?;
-    let config: Config = toml::from_str(&content)
-        .with_context(|| "Failed to parse config.toml")?;
+    let config: Config = toml::from_str(&content).with_context(|| "Failed to parse config.toml")?;
     Ok(config)
 }
 
@@ -86,20 +88,28 @@ pub fn save(config: &Config) -> Result<()> {
 
 pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
     let mut config = load_or_default();
-    let canonical = std::fs::canonicalize(path)
-        .with_context(|| format!("Path does not exist: {}", path))?;
+    let canonical =
+        std::fs::canonicalize(path).with_context(|| format!("Path does not exist: {}", path))?;
     let name = name.or_else(|| {
-        canonical.file_name().map(|n| n.to_string_lossy().into_owned())
+        canonical
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
     });
     let path_str = canonical.to_string_lossy().to_string();
     // Strip Windows extended-length path prefix (\\?\) which canonicalize adds on Windows
     #[cfg(windows)]
-    let path_str = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str).to_string();
+    let path_str = path_str
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&path_str)
+        .to_string();
     if config.repos.iter().any(|r| r.path == path_str) {
         println!("Repo already tracked: {}", path_str);
         return Ok(());
     }
-    config.repos.push(RepoConfig { path: path_str.clone(), name });
+    config.repos.push(RepoConfig {
+        path: path_str.clone(),
+        name,
+    });
     save(&config)?;
     println!("Now tracking: {}", path_str);
     Ok(())
@@ -118,22 +128,14 @@ pub fn remove_repo(path: &str) -> Result<()> {
 }
 
 pub fn api_key(config: &LlmConfig) -> Option<String> {
-    std::env::var("DEVJOURNAL_API_KEY").ok()
+    std::env::var("DEVJOURNAL_API_KEY")
+        .ok()
         .or_else(|| config.api_key.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    fn with_config_dir<F: FnOnce(PathBuf)>(f: F) {
-        let dir = TempDir::new().unwrap();
-        let config_dir = dir.path().join("devjournal");
-        fs::create_dir_all(&config_dir).unwrap();
-        f(config_dir);
-    }
 
     #[test]
     fn test_parse_valid_config() {
