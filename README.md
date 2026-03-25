@@ -46,20 +46,19 @@ cargo install --path .
 
 ## Setup
 
-**1. Add a repository to watch:**
+**1. Run the setup wizard:**
+
+```bash
+devjournal init
+```
+
+This walks you through author name, LLM provider, API key, and model selection, then optionally adds the current directory as a watched repo. The config file is written to the path shown at the end — you can edit it directly at any time.
+
+Alternatively, add a repository manually (this also creates the config on first run):
 
 ```bash
 devjournal add /path/to/your/repo --name my-project
 ```
-
-Relative paths also work, including `.` for the current directory:
-
-```bash
-devjournal add . --name my-project
-devjournal add ../my-api
-```
-
-This creates the config file on first run. You can add as many repos as you like.
 
 **2. Set your author name:**
 
@@ -115,6 +114,7 @@ devjournal today
 | Command                          | Description                                              |
 | -------------------------------- | -------------------------------------------------------- |
 | `devjournal`                     | Show daemon state and watched repos (same as `status`)   |
+| `devjournal init`                | Interactive setup wizard (first-time configuration)      |
 | `devjournal add <path>`          | Add a git repository to the watch list                   |
 | `devjournal remove <path>`       | Remove a repository from the watch list                  |
 | `devjournal daemon start`        | Start the background polling daemon                      |
@@ -137,7 +137,7 @@ devjournal add /path/to/my-api --name API # display name: "API"
 
 ## Configuration
 
-The config file is TOML. It is created automatically the first time you run `devjournal add`. You can edit it directly:
+The config file is TOML. It is created by `devjournal init` or automatically the first time you run `devjournal add`. You can edit it directly:
 
 ```toml
 [general]
@@ -244,7 +244,7 @@ The daemon must have polled at least once since you added the repo. Confirm with
 If the process died without cleaning up its PID file, `daemon start` will detect the stale file and remove it automatically before starting a new process.
 
 **Config file not found?**
-Run `devjournal add <path>` — this creates the config file with defaults if it does not exist yet.
+Run `devjournal init` for guided setup, or `devjournal add <path>` to create the config with defaults.
 
 **"no author configured" error on daemon start?**
 Add your git author name to `[general]` in the config file: `author = "Your Name"`. It must match your git author name exactly (check with `git log --format='%an' | head -1`).
