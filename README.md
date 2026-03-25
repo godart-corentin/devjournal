@@ -5,29 +5,29 @@ A local CLI daemon that watches your git repositories, logs every commit to a lo
 ## How it works
 
 1. A background daemon polls your configured repositories on a fixed interval (default: 60 seconds)
-2. New commits since the last poll are recorded as events in a local SQLite database (`~/.local/share/devjournal/events.db`)
+2. New commits since the last poll are recorded as events in a local SQLite database (see [File paths](#file-paths))
 3. When you run `devjournal today`, it reads today's events from the database and sends them to your configured LLM
 4. The LLM returns a structured markdown summary grouped by project, focused on what was done — not git metadata
-5. The summary is printed to stdout and saved to `~/.local/share/devjournal/summaries/YYYY-MM-DD.md`
+5. The summary is printed to stdout and cached to the summaries directory as `YYYY-MM-DD.md` (subsequent runs return the cached file unless events change or `--force` is used)
 
 The daemon and CLI share the same database directly — no IPC, no server process required. `devjournal today` works whether or not the daemon is running.
 
 ## File paths
 
-| Purpose        | macOS                                                     | Linux                                      | Windows                                              |
-| -------------- | --------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------- |
-| Config         | `~/Library/Application Support/devjournal/config.toml`   | `~/.config/devjournal/config.toml`         | `%APPDATA%\devjournal\config.toml`                   |
-| Database       | `~/Library/Application Support/devjournal/events.db`     | `~/.local/share/devjournal/events.db`      | `%LOCALAPPDATA%\devjournal\events.db`                |
-| PID file       | `~/Library/Application Support/devjournal/devjournal.pid`| `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid`           |
-| Daemon log     | `~/Library/Application Support/devjournal/devjournal.log`| `~/.local/share/devjournal/devjournal.log` | `%LOCALAPPDATA%\devjournal\devjournal.log`           |
-| Summaries      | `~/Library/Application Support/devjournal/summaries/`    | `~/.local/share/devjournal/summaries/`     | `%LOCALAPPDATA%\devjournal\summaries\`               |
+| Purpose    | macOS                                                     | Linux                                      | Windows                                    |
+| ---------- | --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------ |
+| Config     | `~/Library/Application Support/devjournal/config.toml`    | `~/.config/devjournal/config.toml`         | `%APPDATA%\devjournal\config.toml`         |
+| Database   | `~/Library/Application Support/devjournal/events.db`      | `~/.local/share/devjournal/events.db`      | `%LOCALAPPDATA%\devjournal\events.db`      |
+| PID file   | `~/Library/Application Support/devjournal/devjournal.pid` | `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid` |
+| Daemon log | `~/Library/Application Support/devjournal/devjournal.log` | `~/.local/share/devjournal/devjournal.log` | `%LOCALAPPDATA%\devjournal\devjournal.log` |
+| Summaries  | `~/Library/Application Support/devjournal/summaries/`     | `~/.local/share/devjournal/summaries/`     | `%LOCALAPPDATA%\devjournal\summaries\`     |
 
 ## Install
 
 Build from source (requires Rust):
 
 ```bash
-git clone <repo-url> ~/dev-journal
+git clone git@github.com:godart-corentin/dev-journal.git ~/dev-journal
 cd ~/dev-journal
 cargo build --release
 ```
@@ -35,11 +35,13 @@ cargo build --release
 Install the binary:
 
 **macOS / Linux:**
+
 ```bash
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
 
 **Windows:**
+
 ```powershell
 cargo install --path .
 ```
@@ -52,58 +54,24 @@ cargo install --path .
 devjournal init
 ```
 
-This walks you through author name, LLM provider, API key, and model selection, then optionally adds the current directory as a watched repo. The config file is written to the path shown at the end — you can edit it directly at any time.
+This walks you through author name, LLM provider, API key, and model selection, then optionally adds the current directory as a watched repo. You can edit the config file directly at any time (see [Configuration](#configuration)).
 
-Alternatively, add a repository manually (this also creates the config on first run):
-
-```bash
-devjournal add /path/to/your/repo --name my-project
-```
-
-**2. Set your author name:**
-
-Add your git author name to the config so the daemon only records your own commits:
-
-```toml
-[general]
-author = "Your Name"   # must match your git author name exactly
-```
-
-The daemon will refuse to start if this is not set.
-
-**3. Set your LLM provider:**
-
-**Ollama (free, local)** — no API key needed. [Install Ollama](https://ollama.com), pull a model, then configure devjournal to use it:
+**2. Add repositories to watch:**
 
 ```bash
-ollama pull llama3.2
+devjournal add /path/to/your/repo
+devjournal add /path/to/another/repo --name my-project
 ```
 
-```toml
-# in your config.toml
-[llm]
-provider = "ollama"
-model = "llama3.2"       # any model you have pulled
-# base_url = "http://localhost:11434"  # default, change for remote instances
-```
-
-**Claude or OpenAI** — requires an API key. Export it in your shell:
-
-```bash
-export DEVJOURNAL_API_KEY=sk-ant-...
-```
-
-Or add it to the config file (see [Configuration](#configuration)).
-
-**4. Start the daemon:**
+**3. Start the daemon:**
 
 ```bash
 devjournal daemon start
 ```
 
-The daemon runs in the background and polls all configured repos on the interval set in your config. Its PID is written to the PID file so `stop` and `status` can find it.
+The daemon runs in the background and polls all configured repos on the interval set in your config.
 
-**5. Generate today's summary:**
+**4. Generate today's summary:**
 
 ```bash
 devjournal today
@@ -111,30 +79,30 @@ devjournal today
 
 ## Commands
 
-| Command                          | Description                                              |
-| -------------------------------- | -------------------------------------------------------- |
-| `devjournal`                     | Show daemon state and watched repos (same as `status`)   |
-| `devjournal init`                | Interactive setup wizard (first-time configuration)      |
-| `devjournal add <path>`          | Add a git repository to the watch list                   |
-| `devjournal remove <path>`       | Remove a repository from the watch list                  |
-| `devjournal daemon start`        | Start the background polling daemon                      |
-| `devjournal daemon stop`         | Stop the daemon                                          |
-| `devjournal daemon logs`         | Print the path to the daemon log file                    |
-| `devjournal sync [name]`         | Sync full git history into the DB (see below)            |
-| `devjournal status`              | Show daemon state, watched repos, and today's event count |
-| `devjournal today`               | Generate and print today's summary                       |
-| `devjournal summary [YYYY-MM-DD]`| Generate and print the summary for a specific date       |
+| Command                                                  | Description                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `devjournal`                                             | Show daemon state and watched repos (same as `status`)                       |
+| `devjournal init`                                        | Interactive setup wizard (first-time configuration)                          |
+| `devjournal add <path>`                                  | Add a git repository to the watch list                                       |
+| `devjournal remove <path>`                               | Remove a repository from the watch list                                      |
+| `devjournal daemon start`                                | Start the background polling daemon                                          |
+| `devjournal daemon stop`                                 | Stop the daemon                                                              |
+| `devjournal daemon logs`                                 | Print the path to the daemon log file                                        |
+| `devjournal sync [name]`                                 | Sync full git history into the DB (see below)                                |
+| `devjournal status`                                      | Show daemon state, watched repos, and today's event count                    |
+| `devjournal today`                                       | Generate and print today's summary                                           |
+| `devjournal summary [YYYY-MM-DD]`                        | Generate and print the summary for a specific date                           |
 | `devjournal summary --from YYYY-MM-DD [--to YYYY-MM-DD]` | Generate a summary for a date range (defaults to today if `--to` is omitted) |
-| `devjournal week`                | Generate a rolling 7-day summary (today minus 6 days)    |
-| `devjournal month`               | Generate a rolling 30-day summary                        |
-| `devjournal search <keyword>`    | Search recorded events by keyword                        |
-| `devjournal log [YYYY-MM-DD]`    | Show raw recorded events (useful for debugging)          |
-| `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]` | Show raw events for a date range |
-| `devjournal list`                | List all watched repositories                            |
-| `devjournal doctor`              | Run diagnostic checks on your setup                      |
-| `devjournal prune <days>`        | Delete events older than N days                          |
-| `devjournal completions <shell>` | Generate shell completions (bash, zsh, fish)             |
-| `devjournal config`              | Print the path to the config file                        |
+| `devjournal week`                                        | Generate a rolling 7-day summary (today minus 6 days)                        |
+| `devjournal month`                                       | Generate a rolling 30-day summary                                            |
+| `devjournal search <keyword>`                            | Search recorded events by keyword                                            |
+| `devjournal log [YYYY-MM-DD]`                            | Show raw recorded events (useful for debugging)                              |
+| `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]`     | Show raw events for a date range                                             |
+| `devjournal list`                                        | List all watched repositories                                                |
+| `devjournal doctor`                                      | Run diagnostic checks on your setup                                          |
+| `devjournal prune <days>`                                | Delete events older than N days                                              |
+| `devjournal completions <shell>`                         | Generate shell completions (bash, zsh, fish)                                 |
+| `devjournal config`                                      | Print the path to the config file                                            |
 
 The `add` command uses the folder name as the display name by default. Use `--name` to override it:
 
@@ -150,17 +118,20 @@ All summary commands (`today`, `summary`, `week`, `month`) and `search` accept `
 Generate completions for your shell and source them:
 
 **Bash:**
+
 ```bash
 devjournal completions bash > ~/.local/share/bash-completion/completions/devjournal
 ```
 
 **Zsh:**
+
 ```zsh
 devjournal completions zsh > ~/.zfunc/_devjournal
 # Add to .zshrc: fpath+=~/.zfunc; autoload -Uz compinit; compinit
 ```
 
 **Fish:**
+
 ```fish
 devjournal completions fish > ~/.config/fish/completions/devjournal.fish
 ```
@@ -189,17 +160,17 @@ path = "/Users/tylia/workspace/work/my-api"
 name = "my-api"
 ```
 
-| Setting               | Default              | Notes                                             |
-| --------------------- | -------------------- | ------------------------------------------------- |
-| `poll_interval_secs`  | `60`                 | Minimum effective value is 1                      |
-| `author`              | —                    | **Required.** Must match your git author name exactly. Daemon refuses to start without it. |
-| `llm.provider`        | `"claude"`           | `"claude"` or `"openai"`                         |
-| `llm.model`           | `claude-sonnet-4-6`  | For OpenAI: defaults to `gpt-4o`                 |
-| `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama. |
-| `llm.base_url`        | `http://localhost:11434` | Ollama only — change for remote instances     |
-| `retention_days`      | —                    | Optional. When set, the daemon automatically prunes events older than this many days each poll cycle. Can also be triggered manually with `devjournal prune <days>`. |
-| `llm.system_prompt`   | —                    | Optional. Custom prompt that replaces the default summary generation rules. Use this to customize the summary style (e.g., changelog format, standup format, haiku). |
-| `repos[].name`        | folder name          | Defaults to the repository folder name            |
+| Setting              | Default                  | Notes                                                                                                                                                                |
+| -------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `poll_interval_secs` | `60`                     | Minimum effective value is 1                                                                                                                                         |
+| `author`             | —                        | **Required.** Must match your git author name exactly. Daemon refuses to start without it.                                                                           |
+| `llm.provider`       | `"claude"`               | `"claude"` or `"openai"`                                                                                                                                             |
+| `llm.model`          | `claude-sonnet-4-6`      | For OpenAI: defaults to `gpt-4o`                                                                                                                                     |
+| `llm.api_key`        | —                        | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama.                                                                                              |
+| `llm.base_url`       | `http://localhost:11434` | Ollama only — change for remote instances                                                                                                                            |
+| `retention_days`     | —                        | Optional. When set, the daemon automatically prunes events older than this many days each poll cycle. Can also be triggered manually with `devjournal prune <days>`. |
+| `llm.system_prompt`  | —                        | Optional. Custom prompt that replaces the default summary generation rules. Use this to customize the summary style (e.g., changelog format, standup format, haiku). |
+| `repos[].name`       | folder name              | Defaults to the repository folder name                                                                                                                               |
 
 ### First poll behaviour
 
