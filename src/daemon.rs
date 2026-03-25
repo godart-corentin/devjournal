@@ -24,13 +24,24 @@ pub fn start() -> Result<()> {
 
     // Spawn self in daemon mode
     let exe = std::env::current_exe().context("Cannot find current executable")?;
-    let child = std::process::Command::new(exe)
-        .arg("--daemon-mode")
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--daemon-mode")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("Failed to spawn daemon process")?;
+        .stderr(std::process::Stdio::null());
+
+    // On Windows, detach from the parent's console so the daemon outlives the terminal.
+    // DETACHED_PROCESS removes the console association; CREATE_NO_WINDOW prevents a new
+    // console window from appearing and also protects against job-object-based forced exit
+    // in terminal emulators and CI environments.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{DETACHED_PROCESS, CREATE_NO_WINDOW};
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+    }
+
+    let child = cmd.spawn().context("Failed to spawn daemon process")?;
 
     println!("devjournal daemon started (PID: {})", child.id());
     Ok(())
@@ -46,10 +57,7 @@ pub fn stop() -> Result<()> {
         return Ok(());
     }
 
-    // Send SIGTERM
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
+    terminate_process(pid)?;
 
     // Wait up to 5 seconds for it to exit
     for _ in 0..50 {
@@ -100,11 +108,9 @@ pub fn run_daemon_loop() -> Result<()> {
     std::fs::create_dir_all(pid_path().parent().unwrap())?;
     std::fs::write(pid_path(), pid.to_string())?;
 
-    // Set up signal handler
+    // Set up signal/shutdown handler
     SHOULD_STOP.store(false, Ordering::SeqCst);
-    unsafe {
-        libc::signal(libc::SIGTERM, handle_sigterm as *const () as libc::sighandler_t);
-    }
+    install_shutdown_handler();
 
     eprintln!("[devjournal daemon] started with PID {}", pid);
 
@@ -132,7 +138,7 @@ pub fn run_daemon_loop() -> Result<()> {
             Err(e) => eprintln!("[devjournal daemon] DB error: {}", e),
         }
 
-        // Sleep in small increments so we can respond to SIGTERM
+        // Sleep in small increments so we can respond to shutdown signal
         let steps = poll_interval.as_secs().max(1);
         for _ in 0..steps {
             if SHOULD_STOP.load(Ordering::SeqCst) { break; }
@@ -147,9 +153,90 @@ pub fn run_daemon_loop() -> Result<()> {
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
 
+// ── Unix ─────────────────────────────────────────────────────────────────────
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<()> {
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn install_shutdown_handler() {
+    unsafe {
+        let prev = libc::signal(libc::SIGTERM, handle_sigterm as *const () as libc::sighandler_t);
+        if prev == libc::SIG_ERR {
+            eprintln!("[devjournal daemon] warning: failed to install SIGTERM handler");
+        }
+    }
+}
+
+#[cfg(unix)]
 extern "C" fn handle_sigterm(_: libc::c_int) {
     SHOULD_STOP.store(true, Ordering::SeqCst);
 }
+
+// ── Windows ──────────────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+fn is_process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{OpenProcess, GetExitCodeProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        anyhow::ensure!(handle != 0, "Failed to open process {}: access denied or not found", pid);
+        let ok = TerminateProcess(handle, 1);
+        CloseHandle(handle);
+        anyhow::ensure!(ok != 0, "TerminateProcess failed for PID {}", pid);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn install_shutdown_handler() {
+    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+    unsafe {
+        let ok = SetConsoleCtrlHandler(Some(ctrl_handler), 1);
+        if ok == 0 {
+            eprintln!("[devjournal daemon] warning: failed to install console ctrl handler");
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> i32 {
+    use windows_sys::Win32::System::Console::{CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
+    SHOULD_STOP.store(true, Ordering::SeqCst);
+    // For close/logoff/shutdown events Windows forces exit after ~5s regardless.
+    // Attempt immediate PID file cleanup so we don't leave a stale file.
+    if ctrl_type == CTRL_CLOSE_EVENT || ctrl_type == CTRL_LOGOFF_EVENT || ctrl_type == CTRL_SHUTDOWN_EVENT {
+        let _ = std::fs::remove_file(pid_path());
+    }
+    1 // TRUE — handled
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
 
 fn read_pid() -> Result<Option<u32>> {
     let path = pid_path();
@@ -160,8 +247,4 @@ fn read_pid() -> Result<Option<u32>> {
     let pid: u32 = content.trim().parse()
         .with_context(|| format!("Invalid PID in {}", path.display()))?;
     Ok(Some(pid))
-}
-
-fn is_process_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }

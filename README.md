@@ -14,12 +14,12 @@ The daemon and CLI share the same database directly — no IPC, no server proces
 
 ## File paths
 
-| Purpose        | Path                                                      |
-| -------------- | --------------------------------------------------------- |
-| Config         | `~/Library/Application Support/devjournal/config.toml` (macOS) / `~/.config/devjournal/config.toml` (Linux) |
-| Database       | `~/.local/share/devjournal/events.db`                     |
-| PID file       | `~/.local/share/devjournal/devjournal.pid`                |
-| Summaries      | `~/.local/share/devjournal/summaries/YYYY-MM-DD.md`       |
+| Purpose        | macOS                                                     | Linux                                      | Windows                                              |
+| -------------- | --------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------- |
+| Config         | `~/Library/Application Support/devjournal/config.toml`   | `~/.config/devjournal/config.toml`         | `%APPDATA%\devjournal\config.toml`                   |
+| Database       | `~/Library/Application Support/devjournal/events.db`     | `~/.local/share/devjournal/events.db`      | `%LOCALAPPDATA%\devjournal\events.db`                |
+| PID file       | `~/Library/Application Support/devjournal/devjournal.pid`| `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid`           |
+| Summaries      | `~/Library/Application Support/devjournal/summaries/`    | `~/.local/share/devjournal/summaries/`     | `%LOCALAPPDATA%\devjournal\summaries\`               |
 
 ## Install
 
@@ -33,9 +33,17 @@ cargo build --release
 
 Copy the binary somewhere on your `PATH`:
 
+**macOS / Linux:**
 ```bash
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
+
+**Windows (PowerShell):**
+```powershell
+Copy-Item target\release\devjournal.exe "$env:USERPROFILE\.local\bin\devjournal.exe"
+```
+
+Or copy it to any directory already on your `%PATH%`, such as `C:\Users\<you>\AppData\Local\Microsoft\WindowsApps`.
 
 ## Setup
 
@@ -185,8 +193,15 @@ Example output:
 Check that the daemon is running (`devjournal status`). If it started but shows 0 events, wait one poll interval (default 60 seconds) and check again. The daemon logs to stderr — redirect it to a file if you need to inspect it:
 
 ```bash
+# macOS / Linux
 devjournal daemon stop
 devjournal --daemon-mode 2>/tmp/devjournal.log &
+```
+
+```powershell
+# Windows (PowerShell)
+devjournal daemon stop
+Start-Process devjournal -ArgumentList "--daemon-mode" -RedirectStandardError devjournal.log -NoNewWindow
 ```
 
 **`devjournal today` returns "No activity recorded"?**
@@ -194,6 +209,9 @@ The daemon must have polled at least once since you added the repo. Confirm with
 
 **API key not found error?**
 `DEVJOURNAL_API_KEY` in your environment takes precedence over `api_key` in the config file. Make sure it is exported (not just set) in the shell where you run `devjournal today`.
+
+**`daemon stop` times out on Windows?**
+`devjournal daemon stop` uses `TerminateProcess` on Windows, which requires the calling process to have sufficient privilege to open the daemon process. If the daemon was started in a different privilege context (e.g., an elevated terminal), the stop command may fail with "access denied". In that case, kill the process manually via Task Manager or `taskkill /PID <pid> /F`, then remove the stale PID file from `%LOCALAPPDATA%\devjournal\devjournal.pid`.
 
 **Daemon already running after a crash?**
 If the process died without cleaning up its PID file, `daemon start` will detect the stale file and remove it automatically before starting a new process.
