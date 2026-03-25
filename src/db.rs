@@ -174,11 +174,7 @@ pub fn compute_events_fingerprint(events: &[Event]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn event_count_for_date_by_repo(
-    conn: &Connection,
-    repo_path: &str,
-    date: &str,
-) -> Result<i64> {
+pub fn event_count_for_date_by_repo(conn: &Connection, repo_path: &str, date: &str) -> Result<i64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM events WHERE repo_path = ?1 AND timestamp LIKE ?2",
         params![repo_path, format!("{}%", date)],
@@ -188,8 +184,8 @@ pub fn event_count_for_date_by_repo(
 }
 
 pub fn get_latest_poll_time(conn: &Connection) -> Result<Option<String>> {
-    let mut stmt =
-        conn.prepare("SELECT MAX(last_polled_at) FROM poll_state WHERE last_polled_at IS NOT NULL")?;
+    let mut stmt = conn
+        .prepare("SELECT MAX(last_polled_at) FROM poll_state WHERE last_polled_at IS NOT NULL")?;
     let mut rows = stmt.query([])?;
     if let Some(row) = rows.next()? {
         Ok(row.get(0)?)
@@ -289,14 +285,8 @@ mod tests {
 
     #[test]
     fn test_fingerprint_is_stable_regardless_of_order() {
-        let events_a = vec![
-            make_event("/repo/a", "aaa"),
-            make_event("/repo/b", "bbb"),
-        ];
-        let events_b = vec![
-            make_event("/repo/b", "bbb"),
-            make_event("/repo/a", "aaa"),
-        ];
+        let events_a = vec![make_event("/repo/a", "aaa"), make_event("/repo/b", "bbb")];
+        let events_b = vec![make_event("/repo/b", "bbb"), make_event("/repo/a", "aaa")];
         assert_eq!(
             compute_events_fingerprint(&events_a),
             compute_events_fingerprint(&events_b)

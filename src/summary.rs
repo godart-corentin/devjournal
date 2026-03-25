@@ -33,11 +33,7 @@ pub fn generate(date: &str, llm_config: &LlmConfig, force: bool) -> Result<Strin
         if let Ok(cached) = std::fs::read_to_string(&cached_path) {
             if parse_cached_fingerprint(&cached).as_deref() == Some(fingerprint.as_str()) {
                 // Strip the fingerprint header before returning to the user
-                let body = cached
-                    .lines()
-                    .skip(1)
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let body = cached.lines().skip(1).collect::<Vec<_>>().join("\n");
                 return Ok(body);
             }
         }

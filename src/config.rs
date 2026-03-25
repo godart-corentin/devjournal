@@ -331,7 +331,13 @@ name = "my-repo"
 
     #[test]
     fn test_build_config_ollama_with_repo() {
-        let config = build_config(None, "ollama", None, "llama3.2", Some("/tmp/repo".to_string()));
+        let config = build_config(
+            None,
+            "ollama",
+            None,
+            "llama3.2",
+            Some("/tmp/repo".to_string()),
+        );
         assert_eq!(config.llm.provider, "ollama");
         assert_eq!(config.llm.api_key, None);
         assert_eq!(config.llm.model, Some("llama3.2".to_string()));
