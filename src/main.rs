@@ -122,7 +122,12 @@ fn main() -> Result<()> {
             println!("{}", text);
         }
 
-        Some(Commands::Summary { date, from, to, force }) => {
+        Some(Commands::Summary {
+            date,
+            from,
+            to,
+            force,
+        }) => {
             let config = config::load()?;
             match (date, from, to) {
                 (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {

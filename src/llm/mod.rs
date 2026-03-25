@@ -66,7 +66,10 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
 
     if is_range {
         lines.push("Please write a multi-day summary from the perspective of the developer who made these commits.".to_string());
-        lines.push("This covers multiple days — highlight key outcomes and progress across the period.".to_string());
+        lines.push(
+            "This covers multiple days — highlight key outcomes and progress across the period."
+                .to_string(),
+        );
     } else {
         lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
         lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
