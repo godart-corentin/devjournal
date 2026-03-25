@@ -26,9 +26,18 @@ enum Commands {
         action: DaemonAction,
     },
     /// Generate and display today's summary
-    Today,
+    Today {
+        /// Bypass cache and regenerate even if events haven't changed
+        #[arg(long)]
+        force: bool,
+    },
     /// Generate and display summary for a specific date (YYYY-MM-DD)
-    Summary { date: Option<String> },
+    Summary {
+        date: Option<String>,
+        /// Bypass cache and regenerate even if events haven't changed
+        #[arg(long)]
+        force: bool,
+    },
     /// Add a git repository to watch
     Add {
         path: String,
@@ -82,17 +91,17 @@ fn main() -> Result<()> {
             DaemonAction::Logs => println!("{}", daemon::log_path().display()),
         },
 
-        Some(Commands::Today) => {
+        Some(Commands::Today { force }) => {
             let date = summary::today();
             let config = config::load()?;
-            let text = summary::generate(&date, &config.llm)?;
+            let text = summary::generate(&date, &config.llm, force)?;
             println!("{}", text);
         }
 
-        Some(Commands::Summary { date }) => {
+        Some(Commands::Summary { date, force }) => {
             let date = date.unwrap_or_else(summary::today);
             let config = config::load()?;
-            let text = summary::generate(&date, &config.llm)?;
+            let text = summary::generate(&date, &config.llm, force)?;
             println!("{}", text);
         }
 

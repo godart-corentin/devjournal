@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 pub fn data_dir() -> PathBuf {
@@ -153,6 +154,26 @@ pub fn update_poll_state(
     Ok(())
 }
 
+/// Compute a stable SHA-256 fingerprint of a set of events.
+/// Sorts by (repo_path, commit_hash) before hashing so order doesn't matter.
+pub fn compute_events_fingerprint(events: &[Event]) -> String {
+    let mut keys: Vec<String> = events
+        .iter()
+        .map(|e| {
+            let hash = e.data["hash"].as_str().unwrap_or("");
+            format!("{}:{}", e.repo_path, hash)
+        })
+        .collect();
+    keys.sort();
+
+    let mut hasher = Sha256::new();
+    for key in &keys {
+        hasher.update(key.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 pub fn event_count_for_date(conn: &Connection, date: &str) -> Result<i64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM events WHERE timestamp LIKE ?1",
@@ -238,5 +259,50 @@ mod tests {
         let conn = test_conn();
         let state = get_poll_state(&conn, "/nonexistent").unwrap();
         assert!(state.is_none());
+    }
+
+    fn make_event(repo_path: &str, hash: &str) -> Event {
+        Event {
+            id: None,
+            repo_path: repo_path.to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({ "hash": hash }),
+        }
+    }
+
+    #[test]
+    fn test_fingerprint_is_stable_regardless_of_order() {
+        let events_a = vec![
+            make_event("/repo/a", "aaa"),
+            make_event("/repo/b", "bbb"),
+        ];
+        let events_b = vec![
+            make_event("/repo/b", "bbb"),
+            make_event("/repo/a", "aaa"),
+        ];
+        assert_eq!(
+            compute_events_fingerprint(&events_a),
+            compute_events_fingerprint(&events_b)
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_changes_when_events_change() {
+        let events_a = vec![make_event("/repo/a", "aaa")];
+        let events_b = vec![make_event("/repo/a", "bbb")];
+        assert_ne!(
+            compute_events_fingerprint(&events_a),
+            compute_events_fingerprint(&events_b)
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_empty_events_is_deterministic() {
+        let fp1 = compute_events_fingerprint(&[]);
+        let fp2 = compute_events_fingerprint(&[]);
+        assert_eq!(fp1, fp2);
+        assert!(!fp1.is_empty());
     }
 }
