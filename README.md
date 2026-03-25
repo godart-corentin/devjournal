@@ -51,6 +51,13 @@ cargo install --path .
 devjournal add /path/to/your/repo --name my-project
 ```
 
+Relative paths also work, including `.` for the current directory:
+
+```bash
+devjournal add . --name my-project
+devjournal add ../my-api
+```
+
 This creates the config file on first run. You can add as many repos as you like.
 
 **2. Set your author name:**
@@ -106,6 +113,7 @@ devjournal today
 
 | Command                          | Description                                              |
 | -------------------------------- | -------------------------------------------------------- |
+| `devjournal`                     | Show daemon state and watched repos (same as `status`)   |
 | `devjournal add <path>`          | Add a git repository to the watch list                   |
 | `devjournal remove <path>`       | Remove a repository from the watch list                  |
 | `devjournal daemon start`        | Start the background polling daemon                      |
@@ -117,10 +125,11 @@ devjournal today
 | `devjournal list`                | List all watched repositories                            |
 | `devjournal config`              | Print the path to the config file                        |
 
-The `add` command accepts an optional `--name` flag to give the repo a display name used in summaries:
+The `add` command uses the folder name as the display name by default. Use `--name` to override it:
 
 ```bash
-devjournal add /Users/tylia/workspace/perso/dev-journal --name dev-journal
+devjournal add /path/to/my-api            # display name: "my-api"
+devjournal add /path/to/my-api --name API # display name: "API"
 ```
 
 ## Configuration
@@ -155,7 +164,7 @@ name = "my-api"
 | `llm.model`           | `claude-sonnet-4-6`  | For OpenAI: defaults to `gpt-4o`                 |
 | `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama. |
 | `llm.base_url`        | `http://localhost:11434` | Ollama only — change for remote instances     |
-| `repos[].name`        | —                    | Falls back to the full path if not set            |
+| `repos[].name`        | folder name          | Defaults to the repository folder name            |
 
 ### First poll behaviour
 

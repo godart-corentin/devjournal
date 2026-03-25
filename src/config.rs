@@ -88,6 +88,9 @@ pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
     let mut config = load_or_default();
     let canonical = std::fs::canonicalize(path)
         .with_context(|| format!("Path does not exist: {}", path))?;
+    let name = name.or_else(|| {
+        canonical.file_name().map(|n| n.to_string_lossy().into_owned())
+    });
     let path_str = canonical.to_string_lossy().to_string();
     // Strip Windows extended-length path prefix (\\?\) which canonicalize adds on Windows
     #[cfg(windows)]
