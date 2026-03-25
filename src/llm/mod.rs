@@ -36,7 +36,8 @@ pub fn make_backend(
     }
 }
 
-pub fn build_prompt(events: &[Event], date: &str) -> String {
+#[cfg(test)]
+fn build_prompt(events: &[Event], date: &str) -> String {
     build_prompt_with_custom(events, date, None)
 }
 
