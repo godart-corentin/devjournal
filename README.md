@@ -126,9 +126,14 @@ devjournal today
 | `devjournal summary [YYYY-MM-DD]`| Generate and print the summary for a specific date       |
 | `devjournal summary --from YYYY-MM-DD [--to YYYY-MM-DD]` | Generate a summary for a date range (defaults to today if `--to` is omitted) |
 | `devjournal week`                | Generate a rolling 7-day summary (today minus 6 days)    |
+| `devjournal month`               | Generate a rolling 30-day summary                        |
+| `devjournal search <keyword>`    | Search recorded events by keyword                        |
 | `devjournal log [YYYY-MM-DD]`    | Show raw recorded events (useful for debugging)          |
 | `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]` | Show raw events for a date range |
 | `devjournal list`                | List all watched repositories                            |
+| `devjournal doctor`              | Run diagnostic checks on your setup                      |
+| `devjournal prune <days>`        | Delete events older than N days                          |
+| `devjournal completions <shell>` | Generate shell completions (bash, zsh, fish)             |
 | `devjournal config`              | Print the path to the config file                        |
 
 The `add` command uses the folder name as the display name by default. Use `--name` to override it:
@@ -136,6 +141,28 @@ The `add` command uses the folder name as the display name by default. Use `--na
 ```bash
 devjournal add /path/to/my-api            # display name: "my-api"
 devjournal add /path/to/my-api --name API # display name: "API"
+```
+
+All summary commands (`today`, `summary`, `week`, `month`) and `search` accept `--format json` to output raw events as a JSON array instead of a markdown summary. This skips the LLM call entirely.
+
+### Shell completions
+
+Generate completions for your shell and source them:
+
+**Bash:**
+```bash
+devjournal completions bash > ~/.local/share/bash-completion/completions/devjournal
+```
+
+**Zsh:**
+```zsh
+devjournal completions zsh > ~/.zfunc/_devjournal
+# Add to .zshrc: fpath+=~/.zfunc; autoload -Uz compinit; compinit
+```
+
+**Fish:**
+```fish
+devjournal completions fish > ~/.config/fish/completions/devjournal.fish
 ```
 
 ## Configuration
@@ -170,6 +197,8 @@ name = "my-api"
 | `llm.model`           | `claude-sonnet-4-6`  | For OpenAI: defaults to `gpt-4o`                 |
 | `llm.api_key`         | —                    | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama. |
 | `llm.base_url`        | `http://localhost:11434` | Ollama only — change for remote instances     |
+| `retention_days`      | —                    | Optional. When set, the daemon automatically prunes events older than this many days each poll cycle. Can also be triggered manually with `devjournal prune <days>`. |
+| `llm.system_prompt`   | —                    | Optional. Custom prompt that replaces the default summary generation rules. Use this to customize the summary style (e.g., changelog format, standup format, haiku). |
 | `repos[].name`        | folder name          | Defaults to the repository folder name            |
 
 ### First poll behaviour
