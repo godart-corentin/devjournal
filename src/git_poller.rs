@@ -92,7 +92,9 @@ pub fn poll_repo(
 
     let new_commits = if let Some(state) = &poll_state {
         if state.last_commit_hash.as_deref() == Some(&head_hash) {
-            // nothing new
+            // nothing new — still update the poll timestamp so status stays accurate
+            let now = Local::now().to_rfc3339();
+            db::update_poll_state(conn, &repo_config.path, &head_hash, &branch_name, &now)?;
             return Ok(0);
         }
         collect_new_commits(&repo, &head_hash, state.last_commit_hash.as_deref())?
@@ -303,5 +305,37 @@ mod tests {
         poll_repo(&repo_config, &conn, None).unwrap(); // first poll
         let count = poll_repo(&repo_config, &conn, None).unwrap(); // second poll - no new commits
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_poll_updates_last_polled_at_even_when_no_new_commits() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+
+        make_test_repo_with_commit(&dir, "First commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: None,
+        };
+
+        poll_repo(&repo_config, &conn, None).unwrap(); // first poll - sets last_polled_at
+        let state_after_first = db::get_poll_state(&conn, &repo_config.path)
+            .unwrap()
+            .unwrap();
+        let first_polled_at = state_after_first.last_polled_at.unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        poll_repo(&repo_config, &conn, None).unwrap(); // second poll - no new commits
+        let state_after_second = db::get_poll_state(&conn, &repo_config.path)
+            .unwrap()
+            .unwrap();
+        let second_polled_at = state_after_second.last_polled_at.unwrap();
+
+        assert!(
+            second_polled_at > first_polled_at,
+            "last_polled_at should be updated even when no new commits"
+        );
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -83,9 +84,24 @@ pub fn stop() -> Result<()> {
     anyhow::bail!("Daemon did not stop after 5 seconds. PID: {}", pid);
 }
 
+fn format_elapsed(secs: i64) -> String {
+    if secs < 60 {
+        format!("{}s ago", secs)
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
 pub fn status() -> Result<()> {
-    match read_pid()? {
-        Some(pid) if is_process_alive(pid) => {
+    let pid_state = read_pid()?;
+    let is_running = matches!(&pid_state, Some(pid) if is_process_alive(*pid));
+
+    match &pid_state {
+        Some(pid) if is_running => {
             println!("devjournal daemon: running (PID: {})", pid);
         }
         Some(_) => {
@@ -96,20 +112,65 @@ pub fn status() -> Result<()> {
         }
     }
 
-    // Show watched repos and event counts
-    let config = config::load_or_default();
-    if config.repos.is_empty() {
-        println!("No repos configured. Use `devjournal add <path>` to add one.");
-    } else {
-        println!("\nWatched repos:");
-        if let Ok(conn) = db::open() {
+    // Show poll timing info
+    if let Ok(conn) = db::open() {
+        let config = config::load_or_default();
+        if let Some(last_polled) = db::get_latest_poll_time(&conn)? {
+            if let Ok(polled_at) = last_polled.parse::<DateTime<Utc>>() {
+                let elapsed_secs = (Utc::now() - polled_at).num_seconds().max(0);
+                if is_running {
+                    println!("  Last polled: {}", format_elapsed(elapsed_secs));
+                    let interval = config.general.poll_interval_secs as i64;
+                    let next_in = interval - elapsed_secs;
+                    if next_in <= 0 {
+                        println!("  Next poll in: imminent");
+                    } else {
+                        println!("  Next poll in: ~{}s", next_in);
+                    }
+                } else {
+                    println!(
+                        "  Last polled: {} (daemon stopped)",
+                        format_elapsed(elapsed_secs)
+                    );
+                }
+            }
+        }
+
+        // Show watched repos and event counts
+        if config.repos.is_empty() {
+            println!("\nNo repos configured. Use `devjournal add <path>` to add one.");
+        } else {
             let today = crate::summary::today();
+            let mut total_events: i64 = 0;
+            let mut repo_counts: Vec<(&crate::config::RepoConfig, i64)> = Vec::new();
             for repo in &config.repos {
-                let count = db::event_count_for_date(&conn, &today).unwrap_or(0);
+                let count =
+                    db::event_count_for_date_by_repo(&conn, &repo.path, &today).unwrap_or(0);
+                total_events += count;
+                repo_counts.push((repo, count));
+            }
+            println!(
+                "\nWatched repos ({} repos, {} events today):",
+                config.repos.len(),
+                total_events
+            );
+            for (repo, count) in repo_counts {
                 println!("  {} ({} events today)", repo.display_name(), count);
             }
         }
+    } else {
+        // DB unavailable — fall back to config-only output
+        let config = config::load_or_default();
+        if config.repos.is_empty() {
+            println!("\nNo repos configured. Use `devjournal add <path>` to add one.");
+        } else {
+            println!("\nWatched repos:");
+            for repo in &config.repos {
+                println!("  {}", repo.display_name());
+            }
+        }
     }
+
     Ok(())
 }
 

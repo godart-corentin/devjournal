@@ -174,13 +174,28 @@ pub fn compute_events_fingerprint(events: &[Event]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn event_count_for_date(conn: &Connection, date: &str) -> Result<i64> {
+pub fn event_count_for_date_by_repo(
+    conn: &Connection,
+    repo_path: &str,
+    date: &str,
+) -> Result<i64> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM events WHERE timestamp LIKE ?1",
-        params![format!("{}%", date)],
+        "SELECT COUNT(*) FROM events WHERE repo_path = ?1 AND timestamp LIKE ?2",
+        params![repo_path, format!("{}%", date)],
         |row| row.get(0),
     )?;
     Ok(count)
+}
+
+pub fn get_latest_poll_time(conn: &Connection) -> Result<Option<String>> {
+    let mut stmt =
+        conn.prepare("SELECT MAX(last_polled_at) FROM poll_state WHERE last_polled_at IS NOT NULL")?;
+    let mut rows = stmt.query([])?;
+    if let Some(row) = rows.next()? {
+        Ok(row.get(0)?)
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -304,5 +319,52 @@ mod tests {
         let fp2 = compute_events_fingerprint(&[]);
         assert_eq!(fp1, fp2);
         assert!(!fp1.is_empty());
+    }
+
+    #[test]
+    fn test_get_latest_poll_time_returns_none_when_empty() {
+        let conn = test_conn();
+        let result = get_latest_poll_time(&conn).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_latest_poll_time_returns_max_across_repos() {
+        let conn = test_conn();
+        update_poll_state(&conn, "/repo/a", "h1", "main", "2026-03-25T09:00:00Z").unwrap();
+        update_poll_state(&conn, "/repo/b", "h2", "main", "2026-03-25T10:30:00Z").unwrap();
+        update_poll_state(&conn, "/repo/c", "h3", "main", "2026-03-25T08:00:00Z").unwrap();
+        let result = get_latest_poll_time(&conn).unwrap();
+        assert_eq!(result.as_deref(), Some("2026-03-25T10:30:00Z"));
+    }
+
+    #[test]
+    fn test_event_count_for_date_by_repo_only_counts_that_repo() {
+        let conn = test_conn();
+        let event_a = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "a1"}),
+        };
+        let event_b = Event {
+            id: None,
+            repo_path: "/repo/b".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T11:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "b1"}),
+        };
+        insert_event(&conn, &event_a).unwrap();
+        insert_event(&conn, &event_b).unwrap();
+
+        let count_a = event_count_for_date_by_repo(&conn, "/repo/a", "2026-03-25").unwrap();
+        let count_b = event_count_for_date_by_repo(&conn, "/repo/b", "2026-03-25").unwrap();
+        let count_c = event_count_for_date_by_repo(&conn, "/repo/c", "2026-03-25").unwrap();
+        assert_eq!(count_a, 1);
+        assert_eq!(count_b, 1);
+        assert_eq!(count_c, 0);
     }
 }
