@@ -27,11 +27,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Manage the background daemon
-    Daemon {
-        #[command(subcommand)]
-        action: DaemonAction,
-    },
+    /// Start the background daemon
+    Start,
+    /// Stop the running daemon
+    Stop,
     /// Generate and display today's summary
     Today {
         /// Bypass cache and regenerate even if events haven't changed
@@ -136,16 +135,6 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
-enum DaemonAction {
-    /// Start the daemon in the background
-    Start,
-    /// Stop the running daemon
-    Stop,
-    /// Print the path to the daemon log file
-    Logs,
-}
-
 fn print_events_json(events: &[db::Event]) -> Result<()> {
     let json: Vec<&serde_json::Value> = events.iter().map(|e| &e.data).collect();
     println!("{}", serde_json::to_string_pretty(&json)?);
@@ -166,11 +155,8 @@ fn main() -> Result<()> {
             daemon::status()?;
         }
 
-        Some(Commands::Daemon { action }) => match action {
-            DaemonAction::Start => daemon::start()?,
-            DaemonAction::Stop => daemon::stop()?,
-            DaemonAction::Logs => println!("{}", daemon::log_path().display()),
-        },
+        Some(Commands::Start) => daemon::start()?,
+        Some(Commands::Stop) => daemon::stop()?,
 
         Some(Commands::Today { force, format }) => {
             let date = summary::today();

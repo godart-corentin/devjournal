@@ -66,7 +66,7 @@ devjournal add /path/to/another/repo --name my-project
 **3. Start the daemon:**
 
 ```bash
-devjournal daemon start
+devjournal start
 ```
 
 The daemon runs in the background and polls all configured repos on the interval set in your config.
@@ -85,9 +85,8 @@ devjournal today
 | `devjournal init`                                        | Interactive setup wizard (first-time configuration)                          |
 | `devjournal add <path>`                                  | Add a git repository to the watch list                                       |
 | `devjournal remove <path>`                               | Remove a repository from the watch list                                      |
-| `devjournal daemon start`                                | Start the background polling daemon                                          |
-| `devjournal daemon stop`                                 | Stop the daemon                                                              |
-| `devjournal daemon logs`                                 | Print the path to the daemon log file                                        |
+| `devjournal start`                                       | Start the background polling daemon                                          |
+| `devjournal stop`                                        | Stop the daemon                                                              |
 | `devjournal sync [name]`                                 | Sync full git history into the DB (see below)                                |
 | `devjournal status`                                      | Show daemon state, watched repos, and today's event count                    |
 | `devjournal today`                                       | Generate and print today's summary                                           |
@@ -214,27 +213,13 @@ Example output:
 - Implemented SQLite database layer with WAL mode for concurrent daemon/CLI access
 - Added libgit2-based git poller with incremental commit detection
 - Wired up Claude and OpenAI LLM backends with a structured prompt builder
-- Shipped full CLI with clap: add, remove, status, log, today, summary, daemon start/stop
+- Shipped full CLI with clap: add, remove, status, log, today, summary, start/stop
 ```
 
 ## Troubleshooting
 
 **No events showing up in `devjournal log`?**
-Check that the daemon is running (`devjournal status`). If it started but shows 0 events, wait one poll interval (default 60 seconds) and check again. To inspect daemon output, check the log file:
-
-```bash
-# macOS / Linux
-cat "$(devjournal daemon logs)"
-```
-
-```powershell
-# Windows (PowerShell)
-Get-Content "$(devjournal daemon logs)"
-# or open in an editor:
-cursor "$(devjournal daemon logs)"
-```
-
-You can also backfill history immediately without the daemon using `devjournal sync`.
+Check that the daemon is running (`devjournal status`). If it started but shows 0 events, wait one poll interval (default 60 seconds) and check again. To inspect daemon output, check the log file (see [File paths](#file-paths)). You can also backfill history immediately without the daemon using `devjournal sync`.
 
 **`devjournal today` returns "No activity recorded"?**
 The daemon must have polled at least once since you added the repo. Confirm with `devjournal log`. If you want to generate a summary for a past date, the events for that date must already be in the database.
@@ -242,16 +227,16 @@ The daemon must have polled at least once since you added the repo. Confirm with
 **API key not found error?**
 `DEVJOURNAL_API_KEY` in your environment takes precedence over `api_key` in the config file. Make sure it is exported (not just set) in the shell where you run `devjournal today`.
 
-**`daemon stop` times out on Windows?**
-`devjournal daemon stop` uses `TerminateProcess` on Windows, which requires the calling process to have sufficient privilege to open the daemon process. If the daemon was started in a different privilege context (e.g., an elevated terminal), the stop command may fail with "access denied". In that case, kill the process manually via Task Manager or `taskkill /PID <pid> /F`, then remove the stale PID file from `%LOCALAPPDATA%\devjournal\devjournal.pid`.
+**`stop` times out on Windows?**
+`devjournal stop` uses `TerminateProcess` on Windows, which requires the calling process to have sufficient privilege to open the daemon process. If the daemon was started in a different privilege context (e.g., an elevated terminal), the stop command may fail with "access denied". In that case, kill the process manually via Task Manager or `taskkill /PID <pid> /F`, then remove the stale PID file from `%LOCALAPPDATA%\devjournal\devjournal.pid`.
 
 **Daemon already running after a crash?**
-If the process died without cleaning up its PID file, `daemon start` will detect the stale file and remove it automatically before starting a new process.
+If the process died without cleaning up its PID file, `devjournal start` will detect the stale file and remove it automatically before starting a new process.
 
 **Config file not found?**
 Run `devjournal init` for guided setup, or `devjournal add <path>` to create the config with defaults.
 
-**"no author configured" error on daemon start?**
+**"no author configured" error on start?**
 Add your git author name to `[general]` in the config file: `author = "Your Name"`. It must match your git author name exactly (check with `git log --format='%an' | head -1`).
 
 **Ollama: "Failed to call Ollama API"?**
