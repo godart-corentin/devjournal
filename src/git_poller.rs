@@ -7,11 +7,22 @@ use serde_json::json;
 use crate::config::RepoConfig;
 use crate::db::{self, Event};
 
+fn open_repo(path: &str) -> Result<Repository> {
+    // Disable ownership check to support repos in directories owned by a different
+    // Windows user account (e.g. AzureAD-joined machines where the profile path
+    // contains a domain suffix that git treats as a different owner).
+    #[cfg(target_os = "windows")]
+    unsafe {
+        git2::opts::set_verify_owner_validation(false)
+            .context("Failed to disable git owner validation")?;
+    }
+    Repository::open(path).with_context(|| format!("Cannot open git repo at {}", path))
+}
+
 /// Sync all history for a repo into the DB, regardless of prior poll state.
 /// Safe to run multiple times — duplicate commits are ignored via UNIQUE constraint.
 pub fn sync_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
-    let repo = Repository::open(&repo_config.path)
-        .with_context(|| format!("Cannot open git repo at {}", repo_config.path))?;
+    let repo = open_repo(&repo_config.path)?;
 
     let head = match repo.head() {
         Ok(h) => h,
@@ -57,8 +68,7 @@ pub fn sync_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Opt
 }
 
 pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
-    let repo = Repository::open(&repo_config.path)
-        .with_context(|| format!("Cannot open git repo at {}", repo_config.path))?;
+    let repo = open_repo(&repo_config.path)?;
 
     let head = match repo.head() {
         Ok(h) => h,
