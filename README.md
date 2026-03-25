@@ -19,6 +19,7 @@ The daemon and CLI share the same database directly — no IPC, no server proces
 | Config         | `~/Library/Application Support/devjournal/config.toml`   | `~/.config/devjournal/config.toml`         | `%APPDATA%\devjournal\config.toml`                   |
 | Database       | `~/Library/Application Support/devjournal/events.db`     | `~/.local/share/devjournal/events.db`      | `%LOCALAPPDATA%\devjournal\events.db`                |
 | PID file       | `~/Library/Application Support/devjournal/devjournal.pid`| `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid`           |
+| Daemon log     | `~/Library/Application Support/devjournal/devjournal.log`| `~/.local/share/devjournal/devjournal.log` | `%LOCALAPPDATA%\devjournal\devjournal.log`           |
 | Summaries      | `~/Library/Application Support/devjournal/summaries/`    | `~/.local/share/devjournal/summaries/`     | `%LOCALAPPDATA%\devjournal\summaries\`               |
 
 ## Install
@@ -118,6 +119,8 @@ devjournal today
 | `devjournal remove <path>`       | Remove a repository from the watch list                  |
 | `devjournal daemon start`        | Start the background polling daemon                      |
 | `devjournal daemon stop`         | Stop the daemon                                          |
+| `devjournal daemon logs`         | Print the path to the daemon log file                    |
+| `devjournal sync [name]`         | Sync full git history into the DB (see below)            |
 | `devjournal status`              | Show daemon state, watched repos, and today's event count |
 | `devjournal today`               | Generate and print today's summary                       |
 | `devjournal summary [YYYY-MM-DD]`| Generate and print the summary for a specific date       |
@@ -170,6 +173,21 @@ name = "my-api"
 
 On the very first poll of a repo, devjournal records only the most recent commit (HEAD), not the entire history. Subsequent polls record all new commits since the last seen hash.
 
+### Syncing history manually
+
+`devjournal sync` walks the full commit history of a repo and inserts any commits not already in the database. This is useful when you first set up the tool and want to backfill past work:
+
+```bash
+# Sync all watched repos
+devjournal sync
+
+# Sync a specific repo by name or path
+devjournal sync my-project
+devjournal sync /path/to/repo
+```
+
+Running `sync` multiple times is safe — duplicate commits are silently ignored. The daemon can continue running alongside it.
+
 ## Summary format
 
 Summaries follow these rules, enforced via the LLM prompt:
@@ -197,19 +215,21 @@ Example output:
 ## Troubleshooting
 
 **No events showing up in `devjournal log`?**
-Check that the daemon is running (`devjournal status`). If it started but shows 0 events, wait one poll interval (default 60 seconds) and check again. The daemon logs to stderr — redirect it to a file if you need to inspect it:
+Check that the daemon is running (`devjournal status`). If it started but shows 0 events, wait one poll interval (default 60 seconds) and check again. To inspect daemon output, check the log file:
 
 ```bash
 # macOS / Linux
-devjournal daemon stop
-devjournal --daemon-mode 2>/tmp/devjournal.log &
+cat "$(devjournal daemon logs)"
 ```
 
 ```powershell
 # Windows (PowerShell)
-devjournal daemon stop
-Start-Process devjournal -ArgumentList "--daemon-mode" -RedirectStandardError devjournal.log -NoNewWindow
+Get-Content "$(devjournal daemon logs)"
+# or open in an editor:
+cursor "$(devjournal daemon logs)"
 ```
+
+You can also backfill history immediately without the daemon using `devjournal sync`.
 
 **`devjournal today` returns "No activity recorded"?**
 The daemon must have polled at least once since you added the repo. Confirm with `devjournal log`. If you want to generate a summary for a past date, the events for that date must already be in the database.
