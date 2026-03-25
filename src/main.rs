@@ -4,6 +4,7 @@ mod db;
 mod git_poller;
 mod llm;
 mod summary;
+mod update;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -133,6 +134,8 @@ enum Commands {
         /// Name or path of a specific repo to sync (syncs all if omitted)
         repo: Option<String>,
     },
+    /// Update devjournal to the latest release
+    Update,
 }
 
 fn print_events_json(events: &[db::Event]) -> Result<()> {
@@ -452,6 +455,8 @@ fn main() -> Result<()> {
                 }
             }
         }
+
+        Some(Commands::Update) => update::run_update()?,
 
         Some(Commands::Log { date, from, to }) => {
             let conn = db::open()?;

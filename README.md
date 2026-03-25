@@ -24,26 +24,27 @@ The daemon and CLI share the same database directly — no IPC, no server proces
 
 ## Install
 
-Build from source (requires Rust):
+**macOS / Linux (recommended):**
 
 ```bash
-git clone git@github.com:godart-corentin/dev-journal.git ~/dev-journal
-cd ~/dev-journal
+curl -fsSL https://raw.githubusercontent.com/godart-corentin/dev-journal/main/install.sh | sh
+```
+
+This downloads the latest pre-built binary to `~/.local/bin`. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
+
+**Update:**
+
+```bash
+devjournal update
+```
+
+**Build from source** (for contributors, requires Rust):
+
+```bash
+git clone git@github.com:godart-corentin/dev-journal.git
+cd dev-journal
 cargo build --release
-```
-
-Install the binary:
-
-**macOS / Linux:**
-
-```bash
 cp target/release/devjournal ~/.local/bin/devjournal
-```
-
-**Windows:**
-
-```powershell
-cargo install --path .
 ```
 
 ## Setup
@@ -102,6 +103,7 @@ devjournal today
 | `devjournal prune <days>`                                | Delete events older than N days                                              |
 | `devjournal completions <shell>`                         | Generate shell completions (bash, zsh, fish)                                 |
 | `devjournal config`                                      | Print the path to the config file                                            |
+| `devjournal update`                                      | Update devjournal to the latest release                                      |
 
 The `add` command uses the folder name as the display name by default. Use `--name` to override it:
 
