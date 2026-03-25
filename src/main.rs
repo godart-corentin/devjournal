@@ -51,6 +51,12 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Generate a rolling 30-day summary (today minus 29 days through today)
+    Month {
+        /// Bypass cache and regenerate even if events haven't changed
+        #[arg(long)]
+        force: bool,
+    },
     /// Add a git repository to watch
     Add {
         path: String,
@@ -153,6 +159,17 @@ fn main() -> Result<()> {
             use chrono::Duration;
             let to = summary::today();
             let from = (chrono::Local::now() - Duration::days(6))
+                .format("%Y-%m-%d")
+                .to_string();
+            let config = config::load()?;
+            let text = summary::generate_range(&from, &to, &config.llm, force)?;
+            println!("{}", text);
+        }
+
+        Some(Commands::Month { force }) => {
+            use chrono::Duration;
+            let to = summary::today();
+            let from = (chrono::Local::now() - Duration::days(29))
                 .format("%Y-%m-%d")
                 .to_string();
             let config = config::load()?;
