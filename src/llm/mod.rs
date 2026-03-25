@@ -6,7 +6,12 @@ use crate::db::Event;
 use anyhow::Result;
 
 pub trait LlmBackend {
-    fn summarize(&self, events: &[Event], date: &str) -> Result<String>;
+    fn summarize(
+        &self,
+        events: &[Event],
+        date: &str,
+        custom_prompt: Option<&str>,
+    ) -> Result<String>;
 }
 
 pub fn make_backend(
@@ -32,6 +37,14 @@ pub fn make_backend(
 }
 
 pub fn build_prompt(events: &[Event], date: &str) -> String {
+    build_prompt_with_custom(events, date, None)
+}
+
+pub fn build_prompt_with_custom(
+    events: &[Event],
+    date: &str,
+    custom_prompt: Option<&str>,
+) -> String {
     let is_range = date.contains(" to ");
 
     let mut lines = if is_range {
@@ -64,44 +77,50 @@ pub fn build_prompt(events: &[Event], date: &str) -> String {
         lines.push(String::new());
     }
 
-    if is_range {
-        lines.push("Please write a multi-day summary from the perspective of the developer who made these commits.".to_string());
+    if let Some(custom) = custom_prompt {
+        lines.push(custom.to_string());
+    } else {
+        if is_range {
+            lines.push("Please write a multi-day summary from the perspective of the developer who made these commits.".to_string());
+            lines.push(
+                "This covers multiple days — highlight key outcomes and progress across the period."
+                    .to_string(),
+            );
+        } else {
+            lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
+            lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
+        }
+        lines.push("Rules:".to_string());
+        lines.push(format!(
+            "- Start the document with: # Dev Journal — {}",
+            date
+        ));
+        lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
+        lines.push("- STRICT ATTRIBUTION: each bullet must only describe commits listed under that specific project. Never move, copy, or infer work across project sections. A ticket number appearing in multiple projects must be described independently in each.".to_string());
+        if is_range {
+            lines.push("- Each project section should have 1-5 bullets (scale with the number of days). Merge closely related commits.".to_string());
+            lines.push(
+                "- Within each project section, organize bullets chronologically.".to_string(),
+            );
+        } else {
+            lines.push(
+                "- Each project section should have 1-3 bullets max. Merge related commits aggressively."
+                    .to_string(),
+            );
+        }
+        lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
+        lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
+        lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
         lines.push(
-            "This covers multiple days — highlight key outcomes and progress across the period."
+            "- Preserve ticket/issue references (e.g. TT-1234, PROJ-567) if present in commit messages"
                 .to_string(),
         );
-    } else {
-        lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
-        lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
-    }
-    lines.push("Rules:".to_string());
-    lines.push(format!(
-        "- Start the document with: # Dev Journal — {}",
-        date
-    ));
-    lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
-    lines.push("- STRICT ATTRIBUTION: each bullet must only describe commits listed under that specific project. Never move, copy, or infer work across project sections. A ticket number appearing in multiple projects must be described independently in each.".to_string());
-    if is_range {
-        lines.push("- Each project section should have 1-5 bullets (scale with the number of days). Merge closely related commits.".to_string());
-        lines.push("- Within each project section, organize bullets chronologically.".to_string());
-    } else {
         lines.push(
-            "- Each project section should have 1-3 bullets max. Merge related commits aggressively."
+            "- Do NOT mention branch names, file counts, commit hashes, or other git metadata"
                 .to_string(),
         );
+        lines.push("- Do NOT add a reflections section or subjective commentary".to_string());
     }
-    lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
-    lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
-    lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
-    lines.push(
-        "- Preserve ticket/issue references (e.g. TT-1234, PROJ-567) if present in commit messages"
-            .to_string(),
-    );
-    lines.push(
-        "- Do NOT mention branch names, file counts, commit hashes, or other git metadata"
-            .to_string(),
-    );
-    lines.push("- Do NOT add a reflections section or subjective commentary".to_string());
 
     lines.join("\n")
 }
@@ -152,5 +171,17 @@ mod tests {
         assert!(prompt.contains("OUTCOMES"));
         assert!(prompt.contains("standup"));
         assert!(prompt.contains("ticket ID"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_custom_system_prompt() {
+        let events = vec![make_event("proj", "commit msg", "main")];
+        let custom = "Write a haiku summarizing the work.";
+        let prompt = build_prompt_with_custom(&events, "2026-03-23", Some(custom));
+        assert!(prompt.contains("Project: proj"));
+        assert!(prompt.contains("Write a haiku"));
+        // Should NOT contain default rules
+        assert!(!prompt.contains("OUTCOMES"));
+        assert!(!prompt.contains("standup"));
     }
 }

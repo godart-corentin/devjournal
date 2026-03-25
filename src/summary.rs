@@ -53,7 +53,7 @@ pub fn generate(date: &str, llm_config: &LlmConfig, force: bool) -> Result<Strin
         llm_config.base_url.as_deref(),
     );
 
-    let summary = backend.summarize(&events, date)?;
+    let summary = backend.summarize(&events, date, llm_config.system_prompt.as_deref())?;
 
     // Write fingerprint header + summary to file
     std::fs::create_dir_all(summaries_dir())?;
@@ -101,7 +101,7 @@ pub fn generate_range(from: &str, to: &str, llm_config: &LlmConfig, force: bool)
         llm_config.base_url.as_deref(),
     );
 
-    let summary = backend.summarize(&events, &date_label)?;
+    let summary = backend.summarize(&events, &date_label, llm_config.system_prompt.as_deref())?;
 
     std::fs::create_dir_all(summaries_dir())?;
     let content = format!("<!-- fingerprint: {} -->\n{}", fingerprint, summary);

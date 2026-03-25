@@ -32,6 +32,7 @@ pub struct LlmConfig {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -75,6 +76,7 @@ pub fn load_or_default() -> Config {
             api_key: None,
             model: None,
             base_url: None,
+            system_prompt: None,
         },
         repos: vec![],
     })
@@ -165,6 +167,7 @@ pub fn build_config(
             api_key,
             model: Some(model.to_string()),
             base_url: None,
+            system_prompt: None,
         },
         repos,
     }
@@ -356,6 +359,7 @@ name = "my-repo"
             api_key: Some("config-key".to_string()),
             model: None,
             base_url: None,
+            system_prompt: None,
         };
         assert_eq!(api_key(&llm).as_deref(), Some("env-key"));
         std::env::remove_var("DEVJOURNAL_API_KEY");

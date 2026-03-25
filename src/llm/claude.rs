@@ -1,4 +1,4 @@
-use super::{build_prompt, LlmBackend};
+use super::{build_prompt_with_custom, LlmBackend};
 use crate::db::Event;
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -9,8 +9,13 @@ pub struct ClaudeBackend {
 }
 
 impl LlmBackend for ClaudeBackend {
-    fn summarize(&self, events: &[Event], date: &str) -> Result<String> {
-        let prompt = build_prompt(events, date);
+    fn summarize(
+        &self,
+        events: &[Event],
+        date: &str,
+        custom_prompt: Option<&str>,
+    ) -> Result<String> {
+        let prompt = build_prompt_with_custom(events, date, custom_prompt);
         let body = json!({
             "model": self.model,
             "max_tokens": 2048,
