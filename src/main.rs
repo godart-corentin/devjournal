@@ -8,6 +8,13 @@ mod summary;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 
+#[derive(Clone, clap::ValueEnum, Default)]
+enum Format {
+    #[default]
+    Markdown,
+    Json,
+}
+
 #[derive(Parser)]
 #[command(name = "devjournal", about = "Automatic intelligent work diary")]
 struct Cli {
@@ -30,6 +37,9 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Generate and display summary for a specific date or range
     Summary {
@@ -44,18 +54,27 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Generate a rolling 7-day summary (today minus 6 days through today)
     Week {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Generate a rolling 30-day summary (today minus 29 days through today)
     Month {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Add a git repository to watch
     Add {
@@ -94,6 +113,9 @@ enum Commands {
         /// Maximum number of results (default: 20)
         #[arg(long, default_value = "20")]
         limit: usize,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Generate shell completions
     Completions {
@@ -124,6 +146,12 @@ enum DaemonAction {
     Logs,
 }
 
+fn print_events_json(events: &[db::Event]) -> Result<()> {
+    let json: Vec<&serde_json::Value> = events.iter().map(|e| &e.data).collect();
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -144,11 +172,20 @@ fn main() -> Result<()> {
             DaemonAction::Logs => println!("{}", daemon::log_path().display()),
         },
 
-        Some(Commands::Today { force }) => {
+        Some(Commands::Today { force, format }) => {
             let date = summary::today();
-            let config = config::load()?;
-            let text = summary::generate(&date, &config.llm, force)?;
-            println!("{}", text);
+            match format {
+                Format::Json => {
+                    let conn = db::open()?;
+                    let events = db::get_events_for_date(&conn, &date)?;
+                    print_events_json(&events)?;
+                }
+                Format::Markdown => {
+                    let config = config::load()?;
+                    let text = summary::generate(&date, &config.llm, force)?;
+                    println!("{}", text);
+                }
+            }
         }
 
         Some(Commands::Summary {
@@ -156,48 +193,84 @@ fn main() -> Result<()> {
             from,
             to,
             force,
-        }) => {
-            let config = config::load()?;
-            match (date, from, to) {
-                (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
-                    anyhow::bail!("Cannot combine a positional date with --from/--to");
-                }
-                (_, Some(from), to) => {
-                    let to = to.unwrap_or_else(summary::today);
-                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
-                    println!("{}", text);
-                }
-                (_, None, Some(_)) => {
-                    anyhow::bail!("--to requires --from");
-                }
-                (date, None, None) => {
-                    let date = date.unwrap_or_else(summary::today);
-                    let text = summary::generate(&date, &config.llm, force)?;
-                    println!("{}", text);
+            format,
+        }) => match (date, from, to) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                anyhow::bail!("Cannot combine a positional date with --from/--to");
+            }
+            (_, Some(from), to) => {
+                let to = to.unwrap_or_else(summary::today);
+                match format {
+                    Format::Json => {
+                        let conn = db::open()?;
+                        let events = db::get_events_for_range(&conn, &from, &to)?;
+                        print_events_json(&events)?;
+                    }
+                    Format::Markdown => {
+                        let config = config::load()?;
+                        let text = summary::generate_range(&from, &to, &config.llm, force)?;
+                        println!("{}", text);
+                    }
                 }
             }
-        }
+            (_, None, Some(_)) => {
+                anyhow::bail!("--to requires --from");
+            }
+            (date, None, None) => {
+                let date = date.unwrap_or_else(summary::today);
+                match format {
+                    Format::Json => {
+                        let conn = db::open()?;
+                        let events = db::get_events_for_date(&conn, &date)?;
+                        print_events_json(&events)?;
+                    }
+                    Format::Markdown => {
+                        let config = config::load()?;
+                        let text = summary::generate(&date, &config.llm, force)?;
+                        println!("{}", text);
+                    }
+                }
+            }
+        },
 
-        Some(Commands::Week { force }) => {
+        Some(Commands::Week { force, format }) => {
             use chrono::Duration;
             let to = summary::today();
             let from = (chrono::Local::now() - Duration::days(6))
                 .format("%Y-%m-%d")
                 .to_string();
-            let config = config::load()?;
-            let text = summary::generate_range(&from, &to, &config.llm, force)?;
-            println!("{}", text);
+            match format {
+                Format::Json => {
+                    let conn = db::open()?;
+                    let events = db::get_events_for_range(&conn, &from, &to)?;
+                    print_events_json(&events)?;
+                }
+                Format::Markdown => {
+                    let config = config::load()?;
+                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
+                    println!("{}", text);
+                }
+            }
         }
 
-        Some(Commands::Month { force }) => {
+        Some(Commands::Month { force, format }) => {
             use chrono::Duration;
             let to = summary::today();
             let from = (chrono::Local::now() - Duration::days(29))
                 .format("%Y-%m-%d")
                 .to_string();
-            let config = config::load()?;
-            let text = summary::generate_range(&from, &to, &config.llm, force)?;
-            println!("{}", text);
+            match format {
+                Format::Json => {
+                    let conn = db::open()?;
+                    let events = db::get_events_for_range(&conn, &from, &to)?;
+                    print_events_json(&events)?;
+                }
+                Format::Markdown => {
+                    let config = config::load()?;
+                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
+                    println!("{}", text);
+                }
+            }
         }
 
         Some(Commands::Add { path, name }) => {
@@ -368,21 +441,29 @@ fn main() -> Result<()> {
             keyword,
             repo,
             limit,
+            format,
         }) => {
             let conn = db::open()?;
             let events = db::search_events(&conn, &keyword, repo.as_deref(), limit)?;
-            if events.is_empty() {
-                println!("No events matching \"{}\"", keyword);
-            } else {
-                for e in &events {
-                    println!(
-                        "[{}] {} — {}",
-                        &e.timestamp[..10],
-                        e.repo_name.as_deref().unwrap_or(&e.repo_path),
-                        e.data["message"].as_str().unwrap_or("?")
-                    );
+            match format {
+                Format::Json => {
+                    print_events_json(&events)?;
                 }
-                println!("\n{} result(s)", events.len());
+                Format::Markdown => {
+                    if events.is_empty() {
+                        println!("No events matching \"{}\"", keyword);
+                    } else {
+                        for e in &events {
+                            println!(
+                                "[{}] {} — {}",
+                                &e.timestamp[..10],
+                                e.repo_name.as_deref().unwrap_or(&e.repo_path),
+                                e.data["message"].as_str().unwrap_or("?")
+                            );
+                        }
+                        println!("\n{} result(s)", events.len());
+                    }
+                }
             }
         }
 
