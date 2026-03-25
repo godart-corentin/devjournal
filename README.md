@@ -31,19 +31,17 @@ cd ~/dev-journal
 cargo build --release
 ```
 
-Copy the binary somewhere on your `PATH`:
+Install the binary:
 
 **macOS / Linux:**
 ```bash
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
 
-**Windows (PowerShell):**
+**Windows:**
 ```powershell
-Copy-Item target\release\devjournal.exe "$env:USERPROFILE\.local\bin\devjournal.exe"
+cargo install --path .
 ```
-
-Or copy it to any directory already on your `%PATH%`, such as `C:\Users\<you>\AppData\Local\Microsoft\WindowsApps`.
 
 ## Setup
 
