@@ -1,7 +1,7 @@
+use super::{build_prompt, LlmBackend};
+use crate::db::Event;
 use anyhow::{Context, Result};
 use serde_json::json;
-use crate::db::Event;
-use super::{LlmBackend, build_prompt};
 
 pub struct ClaudeBackend {
     pub api_key: String,
@@ -24,7 +24,8 @@ impl LlmBackend for ClaudeBackend {
             .send_json(body)
             .context("Failed to call Claude API")?;
 
-        let json: serde_json::Value = response.into_json()
+        let json: serde_json::Value = response
+            .into_json()
             .context("Failed to parse Claude API response")?;
 
         json["content"][0]["text"]

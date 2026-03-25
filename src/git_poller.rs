@@ -21,7 +21,11 @@ fn open_repo(path: &str) -> Result<Repository> {
 
 /// Sync all history for a repo into the DB, regardless of prior poll state.
 /// Safe to run multiple times — duplicate commits are ignored via UNIQUE constraint.
-pub fn sync_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
+pub fn sync_repo(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+) -> Result<usize> {
     let repo = open_repo(&repo_config.path)?;
 
     let head = match repo.head() {
@@ -67,7 +71,11 @@ pub fn sync_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Opt
     Ok(count)
 }
 
-pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
+pub fn poll_repo(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+) -> Result<usize> {
     let repo = open_repo(&repo_config.path)?;
 
     let head = match repo.head() {
@@ -75,14 +83,10 @@ pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Opt
         Err(_) => return Ok(0), // empty repo, nothing to poll
     };
 
-    let head_commit = head.peel_to_commit()
-        .context("Failed to get HEAD commit")?;
+    let head_commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
     let head_hash = head_commit.id().to_string();
 
-    let branch_name = head
-        .shorthand()
-        .unwrap_or("HEAD")
-        .to_string();
+    let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
 
     let poll_state = db::get_poll_state(conn, &repo_config.path)?;
 
@@ -203,11 +207,7 @@ fn diff_stats(repo: &Repository, commit: &git2::Commit) -> (usize, usize, usize)
 
     if let Some(diff) = diff {
         if let Ok(stats) = diff.stats() {
-            return (
-                stats.files_changed(),
-                stats.insertions(),
-                stats.deletions(),
-            );
+            return (stats.files_changed(), stats.insertions(), stats.deletions());
         }
     }
     (0, 0, 0)
@@ -226,14 +226,16 @@ mod tests {
             let mut index = repo.index().unwrap();
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+                .unwrap();
         }
         repo
     }
 
     fn make_test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 repo_path TEXT NOT NULL, repo_name TEXT,
@@ -245,7 +247,9 @@ mod tests {
                 repo_path TEXT PRIMARY KEY,
                 last_commit_hash TEXT, last_branch TEXT, last_polled_at TEXT
             );
-        ").unwrap();
+        ",
+        )
+        .unwrap();
         conn
     }
 

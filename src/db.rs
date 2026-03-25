@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -22,10 +22,10 @@ pub fn open() -> Result<Connection> {
     Ok(conn)
 }
 
-
 fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo_path TEXT NOT NULL,
@@ -45,7 +45,8 @@ fn init(conn: &Connection) -> Result<()> {
             last_branch TEXT,
             last_polled_at TEXT
         );
-    ")?;
+    ",
+    )?;
     Ok(())
 }
 
@@ -82,7 +83,7 @@ pub fn get_events_for_date(conn: &Connection, date: &str) -> Result<Vec<Event>> 
         "SELECT id, repo_path, repo_name, event_type, timestamp, data
          FROM events
          WHERE timestamp LIKE ?1
-         ORDER BY timestamp ASC"
+         ORDER BY timestamp ASC",
     )?;
     let rows = stmt.query_map(params![format!("{}%", date)], |row| {
         Ok((
@@ -119,7 +120,7 @@ pub struct PollState {
 
 pub fn get_poll_state(conn: &Connection, repo_path: &str) -> Result<Option<PollState>> {
     let mut stmt = conn.prepare(
-        "SELECT last_commit_hash, last_branch, last_polled_at FROM poll_state WHERE repo_path = ?1"
+        "SELECT last_commit_hash, last_branch, last_polled_at FROM poll_state WHERE repo_path = ?1",
     )?;
     let mut rows = stmt.query(params![repo_path])?;
     if let Some(row) = rows.next()? {
@@ -219,7 +220,14 @@ mod tests {
         assert_eq!(state.last_commit_hash.as_deref(), Some("hash1"));
 
         // upsert
-        update_poll_state(&conn, "/tmp/repo", "hash2", "feature/x", "2026-03-23T10:00:00Z").unwrap();
+        update_poll_state(
+            &conn,
+            "/tmp/repo",
+            "hash2",
+            "feature/x",
+            "2026-03-23T10:00:00Z",
+        )
+        .unwrap();
         let state = get_poll_state(&conn, "/tmp/repo").unwrap().unwrap();
         assert_eq!(state.last_commit_hash.as_deref(), Some("hash2"));
         assert_eq!(state.last_branch.as_deref(), Some("feature/x"));

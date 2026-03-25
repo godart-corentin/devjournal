@@ -48,7 +48,7 @@ pub fn start() -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{DETACHED_PROCESS, CREATE_NO_WINDOW};
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, DETACHED_PROCESS};
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
     }
 
@@ -128,7 +128,9 @@ pub fn run_daemon_loop() -> Result<()> {
     let config = config::load_or_default();
 
     if config.general.author.is_none() {
-        eprintln!("[devjournal daemon] error: no author configured. Set `author` in [general] config.");
+        eprintln!(
+            "[devjournal daemon] error: no author configured. Set `author` in [general] config."
+        );
         std::process::exit(1);
     }
 
@@ -141,8 +143,16 @@ pub fn run_daemon_loop() -> Result<()> {
                 for repo in &cfg.repos {
                     match git_poller::poll_repo(repo, &conn, cfg.general.author.as_deref()) {
                         Ok(0) => {}
-                        Ok(n) => eprintln!("[devjournal daemon] {} new commit(s) from {}", n, repo.display_name()),
-                        Err(e) => eprintln!("[devjournal daemon] error polling {}: {}", repo.display_name(), e),
+                        Ok(n) => eprintln!(
+                            "[devjournal daemon] {} new commit(s) from {}",
+                            n,
+                            repo.display_name()
+                        ),
+                        Err(e) => eprintln!(
+                            "[devjournal daemon] error polling {}: {}",
+                            repo.display_name(),
+                            e
+                        ),
                     }
                 }
             }
@@ -152,7 +162,9 @@ pub fn run_daemon_loop() -> Result<()> {
         // Sleep in small increments so we can respond to shutdown signal
         let steps = poll_interval.as_secs().max(1);
         for _ in 0..steps {
-            if SHOULD_STOP.load(Ordering::SeqCst) { break; }
+            if SHOULD_STOP.load(Ordering::SeqCst) {
+                break;
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     }
@@ -173,14 +185,19 @@ fn is_process_alive(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn terminate_process(pid: u32) -> Result<()> {
-    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
     Ok(())
 }
 
 #[cfg(unix)]
 fn install_shutdown_handler() {
     unsafe {
-        let prev = libc::signal(libc::SIGTERM, handle_sigterm as *const () as libc::sighandler_t);
+        let prev = libc::signal(
+            libc::SIGTERM,
+            handle_sigterm as *const () as libc::sighandler_t,
+        );
         if prev == libc::SIG_ERR {
             eprintln!("[devjournal daemon] warning: failed to install SIGTERM handler");
         }
@@ -197,7 +214,9 @@ extern "C" fn handle_sigterm(_: libc::c_int) {
 #[cfg(windows)]
 fn is_process_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{OpenProcess, GetExitCodeProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
@@ -216,7 +235,11 @@ fn terminate_process(pid: u32) -> Result<()> {
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        anyhow::ensure!(!handle.is_null(), "Failed to open process {}: access denied or not found", pid);
+        anyhow::ensure!(
+            !handle.is_null(),
+            "Failed to open process {}: access denied or not found",
+            pid
+        );
         let ok = TerminateProcess(handle, 1);
         CloseHandle(handle);
         anyhow::ensure!(ok != 0, "TerminateProcess failed for PID {}", pid);
@@ -237,11 +260,16 @@ fn install_shutdown_handler() {
 
 #[cfg(windows)]
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> i32 {
-    use windows_sys::Win32::System::Console::{CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT};
+    use windows_sys::Win32::System::Console::{
+        CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
     SHOULD_STOP.store(true, Ordering::SeqCst);
     // For close/logoff/shutdown events Windows forces exit after ~5s regardless.
     // Attempt immediate PID file cleanup so we don't leave a stale file.
-    if ctrl_type == CTRL_CLOSE_EVENT || ctrl_type == CTRL_LOGOFF_EVENT || ctrl_type == CTRL_SHUTDOWN_EVENT {
+    if ctrl_type == CTRL_CLOSE_EVENT
+        || ctrl_type == CTRL_LOGOFF_EVENT
+        || ctrl_type == CTRL_SHUTDOWN_EVENT
+    {
         let _ = std::fs::remove_file(pid_path());
     }
     1 // TRUE — handled
@@ -255,7 +283,9 @@ fn read_pid() -> Result<Option<u32>> {
         return Ok(None);
     }
     let content = std::fs::read_to_string(&path)?;
-    let pid: u32 = content.trim().parse()
+    let pid: u32 = content
+        .trim()
+        .parse()
         .with_context(|| format!("Invalid PID in {}", path.display()))?;
     Ok(Some(pid))
 }

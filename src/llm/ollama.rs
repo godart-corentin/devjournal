@@ -1,7 +1,7 @@
+use super::{build_prompt, LlmBackend};
+use crate::db::Event;
 use anyhow::{Context, Result};
 use serde_json::json;
-use crate::db::Event;
-use super::{LlmBackend, build_prompt};
 
 pub struct OllamaBackend {
     pub base_url: String,
@@ -23,7 +23,8 @@ impl LlmBackend for OllamaBackend {
             .send_json(body)
             .context("Failed to call Ollama API — is Ollama running? Try: ollama serve")?;
 
-        let json: serde_json::Value = response.into_json()
+        let json: serde_json::Value = response
+            .into_json()
             .context("Failed to parse Ollama API response")?;
 
         json["message"]["content"]

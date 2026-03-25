@@ -1,9 +1,9 @@
 mod config;
+mod daemon;
 mod db;
 mod git_poller;
-mod daemon;
-mod summary;
 mod llm;
+mod summary;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -28,9 +28,7 @@ enum Commands {
     /// Generate and display today's summary
     Today,
     /// Generate and display summary for a specific date (YYYY-MM-DD)
-    Summary {
-        date: Option<String>,
-    },
+    Summary { date: Option<String> },
     /// Add a git repository to watch
     Add {
         path: String,
@@ -38,15 +36,11 @@ enum Commands {
         name: Option<String>,
     },
     /// Remove a git repository from the watch list
-    Remove {
-        path: String,
-    },
+    Remove { path: String },
     /// Show daemon status and watched repos
     Status,
     /// Show raw events for today (for debugging)
-    Log {
-        date: Option<String>,
-    },
+    Log { date: Option<String> },
     /// Print the path to the config file
     Config,
     /// List all watched repositories
@@ -126,11 +120,16 @@ fn main() -> Result<()> {
             let repos: Vec<_> = match &repo {
                 None => config.repos.iter().collect(),
                 Some(name) => {
-                    let found = config.repos.iter()
+                    let found = config
+                        .repos
+                        .iter()
                         .find(|r| r.display_name() == name || r.path == *name);
                     match found {
                         Some(r) => vec![r],
-                        None => anyhow::bail!("Repo '{}' not found. Use `devjournal list` to see tracked repos.", name),
+                        None => anyhow::bail!(
+                            "Repo '{}' not found. Use `devjournal list` to see tracked repos.",
+                            name
+                        ),
                     }
                 }
             };
@@ -161,7 +160,8 @@ fn main() -> Result<()> {
                 println!("No events recorded for {}", date);
             } else {
                 for e in &events {
-                    println!("[{}] {} — {}",
+                    println!(
+                        "[{}] {} — {}",
                         e.timestamp,
                         e.repo_name.as_deref().unwrap_or(&e.repo_path),
                         e.data["message"].as_str().unwrap_or("?")
