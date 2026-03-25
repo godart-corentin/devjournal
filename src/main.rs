@@ -6,7 +6,7 @@ mod llm;
 mod summary;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "devjournal", about = "Automatic intelligent work diary")]
@@ -94,6 +94,11 @@ enum Commands {
         /// Maximum number of results (default: 20)
         #[arg(long, default_value = "20")]
         limit: usize,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, elvish)
+        shell: clap_complete::Shell,
     },
     /// Run diagnostic checks on your devjournal setup
     Doctor,
@@ -233,6 +238,11 @@ fn main() -> Result<()> {
                 let count = git_poller::sync_repo(repo_config, &conn, author)?;
                 println!("{} commit(s) added", count);
             }
+        }
+
+        Some(Commands::Completions { shell }) => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "devjournal", &mut std::io::stdout());
         }
 
         Some(Commands::Doctor) => {
