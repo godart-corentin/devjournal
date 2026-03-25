@@ -189,13 +189,13 @@ fn is_process_alive(pid: u32) -> bool {
     use windows_sys::Win32::System::Threading::{OpenProcess, GetExitCodeProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle == 0 {
+        if handle.is_null() {
             return false;
         }
         let mut exit_code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut exit_code);
         CloseHandle(handle);
-        ok != 0 && exit_code == STILL_ACTIVE
+        ok != 0 && exit_code == STILL_ACTIVE as u32
     }
 }
 
@@ -205,7 +205,7 @@ fn terminate_process(pid: u32) -> Result<()> {
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        anyhow::ensure!(handle != 0, "Failed to open process {}: access denied or not found", pid);
+        anyhow::ensure!(!handle.is_null(), "Failed to open process {}: access denied or not found", pid);
         let ok = TerminateProcess(handle, 1);
         CloseHandle(handle);
         anyhow::ensure!(ok != 0, "TerminateProcess failed for PID {}", pid);
