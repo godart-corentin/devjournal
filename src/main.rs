@@ -51,6 +51,11 @@ enum Commands {
     Config,
     /// List all watched repositories
     List,
+    /// Sync all git history for watched repos into the database
+    Sync {
+        /// Name or path of a specific repo to sync (syncs all if omitted)
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -111,6 +116,30 @@ fn main() -> Result<()> {
 
         Some(Commands::Config) => {
             println!("{}", config::config_path().display());
+        }
+
+        Some(Commands::Sync { repo }) => {
+            let config = config::load()?;
+            let author = config.general.author.as_deref();
+            let conn = db::open()?;
+
+            let repos: Vec<_> = match &repo {
+                None => config.repos.iter().collect(),
+                Some(name) => {
+                    let found = config.repos.iter()
+                        .find(|r| r.display_name() == name || r.path == *name);
+                    match found {
+                        Some(r) => vec![r],
+                        None => anyhow::bail!("Repo '{}' not found. Use `devjournal list` to see tracked repos.", name),
+                    }
+                }
+            };
+
+            for repo_config in repos {
+                print!("Syncing {}... ", repo_config.display_name());
+                let count = git_poller::sync_repo(repo_config, &conn, author)?;
+                println!("{} commit(s) added", count);
+            }
         }
 
         Some(Commands::List) => {

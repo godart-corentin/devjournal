@@ -7,6 +7,55 @@ use serde_json::json;
 use crate::config::RepoConfig;
 use crate::db::{self, Event};
 
+/// Sync all history for a repo into the DB, regardless of prior poll state.
+/// Safe to run multiple times — duplicate commits are ignored via UNIQUE constraint.
+pub fn sync_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
+    let repo = Repository::open(&repo_config.path)
+        .with_context(|| format!("Cannot open git repo at {}", repo_config.path))?;
+
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(0),
+    };
+
+    let head_commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
+    let head_hash = head_commit.id().to_string();
+    let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+
+    let all_commits = collect_new_commits(&repo, &head_hash, None)?;
+
+    let now = Local::now().to_rfc3339();
+    let mut count = 0;
+    for commit_info in all_commits {
+        if let Some(author) = author_filter {
+            if commit_info.author != author {
+                continue;
+            }
+        }
+        count += 1;
+        let event = Event {
+            id: None,
+            repo_path: repo_config.path.clone(),
+            repo_name: repo_config.name.clone(),
+            event_type: "commit".to_string(),
+            timestamp: commit_info.timestamp.clone(),
+            data: serde_json::json!({
+                "hash": commit_info.hash,
+                "author": commit_info.author,
+                "message": commit_info.message,
+                "branch": branch_name,
+                "files_changed": commit_info.files_changed,
+                "insertions": commit_info.insertions,
+                "deletions": commit_info.deletions,
+            }),
+        };
+        db::insert_event(conn, &event)?;
+    }
+
+    db::update_poll_state(conn, &repo_config.path, &head_hash, &branch_name, &now)?;
+    Ok(count)
+}
+
 pub fn poll_repo(repo_config: &RepoConfig, conn: &Connection, author_filter: Option<&str>) -> Result<usize> {
     let repo = Repository::open(&repo_config.path)
         .with_context(|| format!("Cannot open git repo at {}", repo_config.path))?;
