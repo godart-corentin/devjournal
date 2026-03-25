@@ -52,6 +52,8 @@ enum Commands {
     Log { date: Option<String> },
     /// Print the path to the config file
     Config,
+    /// Initialize devjournal with guided setup
+    Init,
     /// List all watched repositories
     List,
     /// Sync all git history for watched repos into the database
@@ -148,6 +150,10 @@ fn main() -> Result<()> {
                 let count = git_poller::sync_repo(repo_config, &conn, author)?;
                 println!("{} commit(s) added", count);
             }
+        }
+
+        Some(Commands::Init) => {
+            config::init()?;
         }
 
         Some(Commands::List) => {
