@@ -124,7 +124,10 @@ devjournal today
 | `devjournal status`              | Show daemon state, watched repos, and today's event count |
 | `devjournal today`               | Generate and print today's summary                       |
 | `devjournal summary [YYYY-MM-DD]`| Generate and print the summary for a specific date       |
+| `devjournal summary --from YYYY-MM-DD [--to YYYY-MM-DD]` | Generate a summary for a date range (defaults to today if `--to` is omitted) |
+| `devjournal week`                | Generate a rolling 7-day summary (today minus 6 days)    |
 | `devjournal log [YYYY-MM-DD]`    | Show raw recorded events (useful for debugging)          |
+| `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]` | Show raw events for a date range |
 | `devjournal list`                | List all watched repositories                            |
 | `devjournal config`              | Print the path to the config file                        |
 
@@ -196,7 +199,9 @@ Summaries follow these rules, enforced via the LLM prompt:
 - Action-oriented bullet points: what was done, fixed, tested, or shipped
 - Ticket/issue references preserved (e.g. `TT-1234`, `PROJ-567`)
 - No branch names, file counts, or other git metadata
-- Saved as `YYYY-MM-DD.md` in the summaries directory
+- Saved to the summaries directory (`YYYY-MM-DD.md` for single days, `YYYY-MM-DD_to_YYYY-MM-DD.md` for ranges)
+
+For date ranges, bullets are allowed to scale with the number of days (up to 5 per project) and are ordered chronologically within each section.
 
 Example output:
 
