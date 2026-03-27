@@ -2,6 +2,8 @@ use super::{build_prompt_with_custom, LlmBackend};
 use crate::db::Event;
 use anyhow::{Context, Result};
 
+pub const DEFAULT_MODEL: &str = "gpt-5.4-mini";
+
 pub struct CursorBackend {
     pub model: String,
 }
@@ -15,7 +17,7 @@ impl CursorBackend {
             "--output-format".to_string(),
             "text".to_string(),
         ];
-        if self.model != "gpt-5.4-mini" {
+        if self.model != DEFAULT_MODEL {
             args.push("--model".to_string());
             args.push(self.model.clone());
         }
@@ -42,7 +44,10 @@ impl LlmBackend for CursorBackend {
             anyhow::bail!("cursor agent failed: {}", stderr.trim());
         }
 
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let text = String::from_utf8(output.stdout)
+            .context("cursor agent output was not valid UTF-8")?
+            .trim()
+            .to_string();
         if text.is_empty() {
             anyhow::bail!("cursor agent returned empty output");
         }
