@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod cursor;
 pub mod ollama;
 pub mod openai;
 
