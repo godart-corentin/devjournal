@@ -12,6 +12,7 @@ impl CursorBackend {
     fn build_args(&self, prompt: &str) -> Vec<String> {
         let mut args = vec![
             "agent".to_string(),
+            "--trust".to_string(),
             "-p".to_string(),
             prompt.to_string(),
             "--output-format".to_string(),
@@ -67,7 +68,7 @@ mod tests {
         let args = backend.build_args("hello");
         assert_eq!(
             args,
-            vec!["agent", "-p", "hello", "--output-format", "text"]
+            vec!["agent", "--trust", "-p", "hello", "--output-format", "text"]
         );
     }
 
@@ -81,6 +82,7 @@ mod tests {
             args,
             vec![
                 "agent",
+                "--trust",
                 "-p",
                 "hello",
                 "--output-format",
