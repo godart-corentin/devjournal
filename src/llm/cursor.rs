@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_build_args_default_model() {
         let backend = CursorBackend {
-            model: "gpt-5.4-mini".to_string(),
+            model: DEFAULT_MODEL.to_string(),
         };
         let args = backend.build_args("hello");
         assert_eq!(
