@@ -147,7 +147,7 @@ poll_interval_secs = 60   # How often the daemon polls each repo
 author = "Your Name"      # Required — only commits by this author are recorded
 
 [llm]
-provider = "claude"       # "claude", "openai", or "ollama"
+provider = "claude"       # "claude", "openai", "ollama", or "cursor"
 api_key = "sk-ant-..."    # Optional — prefer DEVJOURNAL_API_KEY env var. Not needed for ollama.
 model = "claude-sonnet-4-6"  # Optional — defaults per provider shown below
 # base_url = "http://localhost:11434"  # Ollama only
@@ -165,9 +165,9 @@ name = "my-api"
 | -------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `poll_interval_secs` | `60`                     | Minimum effective value is 1                                                                                                                                         |
 | `author`             | —                        | **Required.** Must match your git author name exactly. Daemon refuses to start without it.                                                                           |
-| `llm.provider`       | `"claude"`               | `"claude"` or `"openai"`                                                                                                                                             |
-| `llm.model`          | `claude-sonnet-4-6`      | For OpenAI: defaults to `gpt-4o`                                                                                                                                     |
-| `llm.api_key`        | —                        | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama.                                                                                              |
+| `llm.provider`       | `"claude"`               | `"claude"`, `"openai"`, `"ollama"`, or `"cursor"`                                                                                                                    |
+| `llm.model`          | `claude-sonnet-4-6`      | OpenAI: `gpt-4o`. Ollama: `llama3.2`. Cursor: `gpt-5.4-mini`.                                                                                                       |
+| `llm.api_key`        | —                        | `DEVJOURNAL_API_KEY` env var takes precedence. Not required for Ollama or Cursor.                                                                                    |
 | `llm.base_url`       | `http://localhost:11434` | Ollama only — change for remote instances                                                                                                                            |
 | `retention_days`     | —                        | Optional. When set, the daemon automatically prunes events older than this many days each poll cycle. Can also be triggered manually with `devjournal prune <days>`. |
 | `llm.system_prompt`  | —                        | Optional. Custom prompt that replaces the default summary generation rules. Use this to customize the summary style (e.g., changelog format, standup format, haiku). |
@@ -243,3 +243,6 @@ Add your git author name to `[general]` in the config file: `author = "Your Name
 
 **Ollama: "Failed to call Ollama API"?**
 Ollama must be running before you generate a summary. Start it with `ollama serve`, then verify the model is pulled: `ollama list`. If you are running Ollama on a different machine, set `base_url` in your config to point at it.
+
+**Cursor: "cursor agent not found"?**
+Cursor must be installed and the `cursor` binary must be on your PATH. Install from [cursor.com](https://cursor.com) and ensure the CLI is available: `cursor --version`. No API key is required — Cursor uses your existing account auth.
