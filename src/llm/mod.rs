@@ -30,6 +30,9 @@ pub fn make_backend(
             base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
             model: model.unwrap_or("llama3.2").to_string(),
         }),
+        "cursor" => Box::new(cursor::CursorBackend {
+            model: model.unwrap_or(cursor::DEFAULT_MODEL).to_string(),
+        }),
         _ => Box::new(claude::ClaudeBackend {
             api_key: api_key.to_string(),
             model: model.unwrap_or("claude-sonnet-4-6").to_string(),
