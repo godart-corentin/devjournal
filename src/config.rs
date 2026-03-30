@@ -281,7 +281,7 @@ pub fn init() -> Result<()> {
 
     println!("\nConfig written to {}", path.display());
     println!("You can edit that file directly to update your settings.");
-    println!("\nRun `devjournal daemon start` to begin tracking.");
+    println!("\nRun `devjournal start` to begin tracking.");
 
     Ok(())
 }
