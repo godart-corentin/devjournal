@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::config::RepoConfig;
 use crate::db::{self, Event};
+use crate::sem::{CliSemExtractor, SemExtractor, SemMetadata};
 
 fn open_repo(path: &str) -> Result<Repository> {
     // Disable ownership check to support repos in directories owned by a different
@@ -25,6 +26,16 @@ pub fn sync_repo(
     repo_config: &RepoConfig,
     conn: &Connection,
     author_filter: Option<&str>,
+) -> Result<usize> {
+    let extractor = CliSemExtractor;
+    sync_repo_with_extractor(repo_config, conn, author_filter, &extractor)
+}
+
+fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+    extractor: &E,
 ) -> Result<usize> {
     let repo = open_repo(&repo_config.path)?;
 
@@ -48,22 +59,7 @@ pub fn sync_repo(
             }
         }
         count += 1;
-        let event = Event {
-            id: None,
-            repo_path: repo_config.path.clone(),
-            repo_name: repo_config.name.clone(),
-            event_type: "commit".to_string(),
-            timestamp: commit_info.timestamp.clone(),
-            data: serde_json::json!({
-                "hash": commit_info.hash,
-                "author": commit_info.author,
-                "message": commit_info.message,
-                "branch": branch_name,
-                "files_changed": commit_info.files_changed,
-                "insertions": commit_info.insertions,
-                "deletions": commit_info.deletions,
-            }),
-        };
+        let event = build_commit_event(repo_config, &branch_name, &commit_info, extractor);
         db::insert_event(conn, &event)?;
     }
 
@@ -75,6 +71,16 @@ pub fn poll_repo(
     repo_config: &RepoConfig,
     conn: &Connection,
     author_filter: Option<&str>,
+) -> Result<usize> {
+    let extractor = CliSemExtractor;
+    poll_repo_with_extractor(repo_config, conn, author_filter, &extractor)
+}
+
+fn poll_repo_with_extractor<E: SemExtractor + ?Sized>(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+    extractor: &E,
 ) -> Result<usize> {
     let repo = open_repo(&repo_config.path)?;
 
@@ -116,22 +122,7 @@ pub fn poll_repo(
             }
         }
         count += 1;
-        let event = Event {
-            id: None,
-            repo_path: repo_config.path.clone(),
-            repo_name: repo_config.name.clone(),
-            event_type: "commit".to_string(),
-            timestamp: commit_info.timestamp.clone(),
-            data: json!({
-                "hash": commit_info.hash,
-                "author": commit_info.author,
-                "message": commit_info.message,
-                "branch": branch_name,
-                "files_changed": commit_info.files_changed,
-                "insertions": commit_info.insertions,
-                "deletions": commit_info.deletions,
-            }),
-        };
+        let event = build_commit_event(repo_config, &branch_name, &commit_info, extractor);
         db::insert_event(conn, &event)?;
     }
 
@@ -141,6 +132,7 @@ pub fn poll_repo(
 
 struct CommitInfo {
     hash: String,
+    full_hash: String,
     author: String,
     message: String,
     timestamp: String,
@@ -185,6 +177,7 @@ fn collect_new_commits(
 
         commits.push(CommitInfo {
             hash: oid.to_string()[..8].to_string(),
+            full_hash: oid.to_string(),
             author,
             message,
             timestamp,
@@ -215,23 +208,83 @@ fn diff_stats(repo: &Repository, commit: &git2::Commit) -> (usize, usize, usize)
     (0, 0, 0)
 }
 
+fn build_commit_event<E: SemExtractor + ?Sized>(
+    repo_config: &RepoConfig,
+    branch_name: &str,
+    commit_info: &CommitInfo,
+    extractor: &E,
+) -> Event {
+    let mut data = json!({
+        "hash": commit_info.hash,
+        "author": commit_info.author,
+        "message": commit_info.message,
+        "branch": branch_name,
+        "files_changed": commit_info.files_changed,
+        "insertions": commit_info.insertions,
+        "deletions": commit_info.deletions,
+    });
+
+    if let Some(sem) = extract_sem_metadata(extractor, &repo_config.path, &commit_info.full_hash) {
+        data["sem"] = serde_json::to_value(sem).expect("sem metadata should serialize");
+    }
+
+    Event {
+        id: None,
+        repo_path: repo_config.path.clone(),
+        repo_name: repo_config.name.clone(),
+        event_type: "commit".to_string(),
+        timestamp: commit_info.timestamp.clone(),
+        data,
+    }
+}
+
+fn extract_sem_metadata<E: SemExtractor + ?Sized>(
+    extractor: &E,
+    repo_path: &str,
+    commit_hash: &str,
+) -> Option<SemMetadata> {
+    match extractor.extract(repo_path, commit_hash) {
+        Ok(sem) => sem,
+        Err(err) => {
+            eprintln!(
+                "Warning: failed to extract sem data for commit {}: {:#}",
+                commit_hash, err
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sem::{SemEntity, SemExtractor, SemMetadata};
+    use anyhow::anyhow;
     use git2::{Repository, Signature};
+    use std::cell::RefCell;
     use tempfile::TempDir;
 
     fn make_test_repo_with_commit(dir: &TempDir, message: &str) -> Repository {
         let repo = Repository::init(dir.path()).unwrap();
-        let sig = Signature::now("Test User", "test@test.com").unwrap();
-        {
-            let mut index = repo.index().unwrap();
-            let tree_id = index.write_tree().unwrap();
-            let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
-                .unwrap();
-        }
+        commit_in_repo(&repo, message);
         repo
+    }
+
+    fn commit_in_repo(repo: &Repository, message: &str) {
+        let sig = Signature::now("Test User", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+
+        let parent_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| repo.find_commit(oid).ok());
+        let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap();
     }
 
     fn make_test_conn() -> Connection {
@@ -253,6 +306,47 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    struct StubSemExtractor {
+        responses: RefCell<Vec<Result<Option<SemMetadata>>>>,
+    }
+
+    impl StubSemExtractor {
+        fn new(responses: Vec<Result<Option<SemMetadata>>>) -> Self {
+            Self {
+                responses: RefCell::new(responses.into_iter().rev().collect()),
+            }
+        }
+    }
+
+    impl SemExtractor for StubSemExtractor {
+        fn extract(&self, _repo_path: &str, _commit_hash: &str) -> Result<Option<SemMetadata>> {
+            self.responses
+                .borrow_mut()
+                .pop()
+                .unwrap_or_else(|| Ok(None))
+        }
+    }
+
+    fn sample_sem_metadata() -> SemMetadata {
+        SemMetadata {
+            summary: "2 semantic changes across 1 files (1 added, 1 modified)".to_string(),
+            entities: vec![
+                SemEntity {
+                    name: "validate_token".to_string(),
+                    kind: "function".to_string(),
+                    change_type: "added".to_string(),
+                },
+                SemEntity {
+                    name: "authenticate_user".to_string(),
+                    kind: "function".to_string(),
+                    change_type: "modified".to_string(),
+                },
+            ],
+            change_types: vec!["added".to_string(), "modified".to_string()],
+            files: vec!["src/auth.rs".to_string()],
+        }
     }
 
     #[test]
@@ -289,6 +383,96 @@ mod tests {
         let events = db::get_events_for_date(&conn, &today).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data["message"], "Initial commit");
+    }
+
+    #[test]
+    fn test_poll_new_repo_records_sem_data_when_available() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        make_test_repo_with_commit(&dir, "Initial commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Ok(Some(sample_sem_metadata()))]);
+
+        let count = poll_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(count, 1);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert_eq!(
+            events[0].data["sem"]["summary"],
+            sample_sem_metadata().summary
+        );
+        assert_eq!(
+            events[0].data["sem"]["change_types"],
+            json!(["added", "modified"])
+        );
+    }
+
+    #[test]
+    fn test_poll_new_repo_omits_sem_data_when_unavailable() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        make_test_repo_with_commit(&dir, "Initial commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Ok(None)]);
+
+        let count = poll_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(count, 1);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert!(events[0].data.get("sem").is_none());
+    }
+
+    #[test]
+    fn test_poll_repo_succeeds_when_sem_extraction_errors() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        make_test_repo_with_commit(&dir, "Initial commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Err(anyhow!("sem failed"))]);
+
+        let count = poll_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(count, 1);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert_eq!(events[0].data["message"], "Initial commit");
+        assert!(events[0].data.get("sem").is_none());
+    }
+
+    #[test]
+    fn test_sync_repo_succeeds_when_sem_extraction_errors() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = make_test_repo_with_commit(&dir, "First commit");
+        commit_in_repo(&repo, "Second commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Err(anyhow!("sem failed")), Ok(None)]);
+
+        let count = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(count, 2);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.data.get("sem").is_none()));
     }
 
     #[test]

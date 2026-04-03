@@ -3,6 +3,7 @@ mod daemon;
 mod db;
 mod git_poller;
 mod llm;
+mod sem;
 mod summary;
 mod update;
 

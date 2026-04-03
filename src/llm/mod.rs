@@ -4,6 +4,7 @@ pub mod ollama;
 pub mod openai;
 
 use crate::db::Event;
+use crate::sem::from_value as sem_from_value;
 use anyhow::Result;
 
 pub trait LlmBackend {
@@ -78,6 +79,29 @@ pub fn build_prompt_with_custom(
             let message = e.data["message"].as_str().unwrap_or("no message");
             let hash = e.data["hash"].as_str().unwrap_or("?");
             lines.push(format!("  - [{}] ({}) {}", hash, branch, message));
+            if let Some(sem) = sem_from_value(&e.data["sem"]) {
+                lines.push(format!("    semantic summary: {}", sem.summary));
+
+                if !sem.entities.is_empty() {
+                    let entities = sem
+                        .entities
+                        .iter()
+                        .map(|entity| {
+                            format!("{} {} [{}]", entity.kind, entity.name, entity.change_type)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(format!("    entities: {}", entities));
+                }
+
+                if !sem.change_types.is_empty() {
+                    lines.push(format!("    change types: {}", sem.change_types.join(", ")));
+                }
+
+                if !sem.files.is_empty() {
+                    lines.push(format!("    files: {}", sem.files.join(", ")));
+                }
+            }
         }
         lines.push(String::new());
     }
@@ -114,6 +138,7 @@ pub fn build_prompt_with_custom(
             );
         }
         lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
+        lines.push("- When semantic summary, entities, or files are present for a commit, prefer those concrete signals to infer the real outcome instead of relying only on the commit message.".to_string());
         lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
         lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
         lines.push(
@@ -134,32 +159,58 @@ pub fn build_prompt_with_custom(
 mod tests {
     use super::*;
     use crate::db::Event;
+    use crate::sem::{SemEntity, SemMetadata};
 
-    fn make_event(repo_name: &str, message: &str, branch: &str) -> Event {
+    fn make_event(repo_name: &str, message: &str, branch: &str, sem: Option<SemMetadata>) -> Event {
+        let mut data = serde_json::json!({
+            "hash": "abc123",
+            "author": "Dev",
+            "message": message,
+            "branch": branch,
+            "files_changed": 2,
+            "insertions": 10,
+            "deletions": 5
+        });
+        if let Some(sem) = sem {
+            data["sem"] = serde_json::to_value(sem).unwrap();
+        }
+
         Event {
             id: None,
             repo_path: "/tmp/repo".to_string(),
             repo_name: Some(repo_name.to_string()),
             event_type: "commit".to_string(),
             timestamp: "2026-03-23T10:00:00Z".to_string(),
-            data: serde_json::json!({
-                "hash": "abc123",
-                "author": "Dev",
-                "message": message,
-                "branch": branch,
-                "files_changed": 2,
-                "insertions": 10,
-                "deletions": 5
-            }),
+            data,
+        }
+    }
+
+    fn sample_sem() -> SemMetadata {
+        SemMetadata {
+            summary: "2 semantic changes across 1 files (1 added, 1 modified)".to_string(),
+            entities: vec![
+                SemEntity {
+                    name: "validate_token".to_string(),
+                    kind: "function".to_string(),
+                    change_type: "added".to_string(),
+                },
+                SemEntity {
+                    name: "authenticate_user".to_string(),
+                    kind: "function".to_string(),
+                    change_type: "modified".to_string(),
+                },
+            ],
+            change_types: vec!["added".to_string(), "modified".to_string()],
+            files: vec!["src/auth.rs".to_string()],
         }
     }
 
     #[test]
     fn test_prompt_groups_by_project() {
         let events = vec![
-            make_event("project-alpha", "Fix TT-1234 bug", "main"),
-            make_event("project-beta", "Add feature X", "feature/x"),
-            make_event("project-alpha", "Refactor auth", "main"),
+            make_event("project-alpha", "Fix TT-1234 bug", "main", None),
+            make_event("project-beta", "Add feature X", "feature/x", None),
+            make_event("project-alpha", "Refactor auth", "main", None),
         ];
         let prompt = build_prompt(&events, "2026-03-23");
         assert!(prompt.contains("Project: project-alpha"));
@@ -170,17 +221,18 @@ mod tests {
 
     #[test]
     fn test_prompt_no_metadata_instructions() {
-        let events = vec![make_event("proj", "commit msg", "main")];
+        let events = vec![make_event("proj", "commit msg", "main", None)];
         let prompt = build_prompt(&events, "2026-03-23");
         assert!(prompt.contains("Do NOT mention branch names"));
         assert!(prompt.contains("OUTCOMES"));
         assert!(prompt.contains("standup"));
         assert!(prompt.contains("ticket ID"));
+        assert!(prompt.contains("prefer those concrete signals"));
     }
 
     #[test]
     fn test_build_prompt_with_custom_system_prompt() {
-        let events = vec![make_event("proj", "commit msg", "main")];
+        let events = vec![make_event("proj", "commit msg", "main", None)];
         let custom = "Write a haiku summarizing the work.";
         let prompt = build_prompt_with_custom(&events, "2026-03-23", Some(custom));
         assert!(prompt.contains("Project: proj"));
@@ -188,5 +240,21 @@ mod tests {
         // Should NOT contain default rules
         assert!(!prompt.contains("OUTCOMES"));
         assert!(!prompt.contains("standup"));
+    }
+
+    #[test]
+    fn test_prompt_includes_semantic_fields_when_present() {
+        let events = vec![make_event(
+            "proj",
+            "Refactor auth",
+            "main",
+            Some(sample_sem()),
+        )];
+        let prompt = build_prompt(&events, "2026-03-23");
+
+        assert!(prompt.contains("semantic summary: 2 semantic changes across 1 files"));
+        assert!(prompt.contains("entities: function validate_token [added]"));
+        assert!(prompt.contains("change types: added, modified"));
+        assert!(prompt.contains("files: src/auth.rs"));
     }
 }
