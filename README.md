@@ -96,8 +96,8 @@ devjournal today
 | `devjournal week`                                        | Generate a rolling 7-day summary (today minus 6 days)                        |
 | `devjournal month`                                       | Generate a rolling 30-day summary                                            |
 | `devjournal search <keyword>`                            | Search recorded events by keyword                                            |
-| `devjournal log [YYYY-MM-DD]`                            | Show raw recorded events (useful for debugging)                              |
-| `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]`     | Show raw events for a date range                                             |
+| `devjournal log [YYYY-MM-DD]`                            | Show raw recorded events (useful for debugging, supports `--format json`)    |
+| `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]`     | Show raw events for a date range (supports `--format json`)                  |
 | `devjournal list`                                        | List all watched repositories                                                |
 | `devjournal doctor`                                      | Run diagnostic checks on your setup                                          |
 | `devjournal prune <days>`                                | Delete events older than N days                                              |
@@ -112,7 +112,7 @@ devjournal add /path/to/my-api            # display name: "my-api"
 devjournal add /path/to/my-api --name API # display name: "API"
 ```
 
-All summary commands (`today`, `summary`, `week`, `month`) and `search` accept `--format json` to output raw events as a JSON array instead of a markdown summary. This skips the LLM call entirely.
+All summary commands (`today`, `summary`, `week`, `month`), `search`, and `log` accept `--format json` to output raw events as a JSON array instead of a markdown summary or line-based log view. For summary commands and `search`, this skips the LLM call entirely.
 
 ### Shell completions
 
@@ -192,6 +192,8 @@ devjournal sync /path/to/repo
 
 Running `sync` multiple times is safe — duplicate commits are silently ignored. The daemon can continue running alongside it.
 
+If the optional `sem` CLI is installed and available on your `PATH`, devjournal also stores semantic diff metadata for commits and uses it to generate more concrete summaries. Re-running `devjournal sync` can backfill that metadata for existing commits, and cached summaries are refreshed automatically when the underlying event payload changes.
+
 ## Summary format
 
 Summaries follow these rules, enforced via the LLM prompt:
@@ -199,6 +201,7 @@ Summaries follow these rules, enforced via the LLM prompt:
 - Grouped by project with `##` section headers
 - Action-oriented bullet points: what was done, fixed, tested, or shipped
 - Ticket/issue references preserved (e.g. `TT-1234`, `PROJ-567`)
+- When semantic metadata is available, summaries prefer concrete entities/files changed over commit-message-only guesses
 - No branch names, file counts, or other git metadata
 - Saved to the summaries directory (`YYYY-MM-DD.md` for single days, `YYYY-MM-DD_to_YYYY-MM-DD.md` for ranges)
 
@@ -246,3 +249,6 @@ Ollama must be running before you generate a summary. Start it with `ollama serv
 
 **Cursor: "cursor agent not found"?**
 Cursor must be installed and the `cursor` binary must be on your PATH. Install from [cursor.com](https://cursor.com) and ensure the CLI is available: `cursor --version`. No API key is required — Cursor uses your existing account auth.
+
+**Warnings about `sem` extraction?**
+Semantic enrichment is optional. If `sem` is not installed, not on your `PATH`, or fails for a commit, devjournal still records the commit and generates summaries using the regular git metadata. Install `sem` and run `devjournal sync` to backfill semantic metadata for existing commits.
