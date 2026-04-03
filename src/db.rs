@@ -63,19 +63,60 @@ pub struct Event {
 
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
     let commit_hash = event.data["hash"].as_str().map(|s| s.to_string());
+    let data = merged_event_data(
+        conn,
+        event.repo_path.as_str(),
+        commit_hash.as_deref(),
+        &event.data,
+    )?;
     conn.execute(
-        "INSERT OR IGNORE INTO events (repo_path, repo_name, event_type, timestamp, commit_hash, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO events (repo_path, repo_name, event_type, timestamp, commit_hash, data)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(repo_path, commit_hash) DO UPDATE SET
+             repo_name = excluded.repo_name,
+             event_type = excluded.event_type,
+             timestamp = excluded.timestamp,
+             data = excluded.data",
         params![
             event.repo_path,
             event.repo_name,
             event.event_type,
             event.timestamp,
             commit_hash,
-            serde_json::to_string(&event.data)?
+            serde_json::to_string(&data)?
         ],
     )?;
     Ok(())
+}
+
+fn merged_event_data(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: Option<&str>,
+    incoming: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let Some(commit_hash) = commit_hash else {
+        return Ok(incoming.clone());
+    };
+
+    let existing = conn.query_row(
+        "SELECT data FROM events WHERE repo_path = ?1 AND commit_hash = ?2",
+        params![repo_path, commit_hash],
+        |row| row.get::<_, String>(0),
+    );
+
+    let Ok(existing_data) = existing else {
+        return Ok(incoming.clone());
+    };
+
+    let existing_data: serde_json::Value = serde_json::from_str(&existing_data)?;
+    if incoming.get("sem").is_some() || existing_data.get("sem").is_none() {
+        return Ok(incoming.clone());
+    }
+
+    let mut merged = incoming.clone();
+    merged["sem"] = existing_data["sem"].clone();
+    Ok(merged)
 }
 
 pub fn get_events_for_date(conn: &Connection, date: &str) -> Result<Vec<Event>> {
@@ -155,13 +196,20 @@ pub fn update_poll_state(
 }
 
 /// Compute a stable SHA-256 fingerprint of a set of events.
-/// Sorts by (repo_path, commit_hash) before hashing so order doesn't matter.
+/// Sorts event payload signatures first so retrieval order doesn't matter.
 pub fn compute_events_fingerprint(events: &[Event]) -> String {
     let mut keys: Vec<String> = events
         .iter()
         .map(|e| {
-            let hash = e.data["hash"].as_str().unwrap_or("");
-            format!("{}:{}", e.repo_path, hash)
+            let data = serde_json::to_string(&e.data).unwrap_or_default();
+            format!(
+                "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                e.repo_path,
+                e.repo_name.as_deref().unwrap_or(""),
+                e.event_type,
+                e.timestamp,
+                data
+            )
         })
         .collect();
     keys.sort();
@@ -344,6 +392,100 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_event_updates_existing_commit_payload() {
+        let conn = test_conn();
+        let original = Event {
+            id: None,
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: Some("my-repo".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-23T10:00:00Z".to_string(),
+            data: serde_json::json!({
+                "hash": "abc123",
+                "message": "Initial message",
+                "author": "Tylia",
+                "branch": "main"
+            }),
+        };
+        let enriched = Event {
+            id: None,
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: Some("my-repo".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-23T10:00:00Z".to_string(),
+            data: serde_json::json!({
+                "hash": "abc123",
+                "message": "Initial message",
+                "author": "Tylia",
+                "branch": "main",
+                "sem": {
+                    "summary": "1 semantic change across 1 files",
+                    "entities": [],
+                    "change_types": ["modified"],
+                    "files": ["src/lib.rs"]
+                }
+            }),
+        };
+
+        insert_event(&conn, &original).unwrap();
+        insert_event(&conn, &enriched).unwrap();
+
+        let events = get_events_for_date(&conn, "2026-03-23").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].data["sem"]["summary"],
+            "1 semantic change across 1 files"
+        );
+    }
+
+    #[test]
+    fn test_insert_event_preserves_existing_sem_when_new_payload_lacks_it() {
+        let conn = test_conn();
+        let enriched = Event {
+            id: None,
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: Some("my-repo".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-23T10:00:00Z".to_string(),
+            data: serde_json::json!({
+                "hash": "abc123",
+                "message": "Initial message",
+                "author": "Tylia",
+                "branch": "main",
+                "sem": {
+                    "summary": "1 semantic change across 1 files",
+                    "entities": [],
+                    "change_types": ["modified"],
+                    "files": ["src/lib.rs"]
+                }
+            }),
+        };
+        let without_sem = Event {
+            id: None,
+            repo_path: "/tmp/repo".to_string(),
+            repo_name: Some("my-repo".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-23T10:00:00Z".to_string(),
+            data: serde_json::json!({
+                "hash": "abc123",
+                "message": "Initial message",
+                "author": "Tylia",
+                "branch": "main"
+            }),
+        };
+
+        insert_event(&conn, &enriched).unwrap();
+        insert_event(&conn, &without_sem).unwrap();
+
+        let events = get_events_for_date(&conn, "2026-03-23").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].data["sem"]["summary"],
+            "1 semantic change across 1 files"
+        );
+    }
+
+    #[test]
     fn test_get_events_wrong_date_returns_empty() {
         let conn = test_conn();
         let event = Event {
@@ -415,6 +557,39 @@ mod tests {
         assert_ne!(
             compute_events_fingerprint(&events_a),
             compute_events_fingerprint(&events_b)
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_changes_when_event_payload_changes() {
+        let event_a = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({ "hash": "aaa" }),
+        };
+        let event_b = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({
+                "hash": "aaa",
+                "sem": {
+                    "summary": "1 semantic change across 1 files",
+                    "entities": [],
+                    "change_types": ["modified"],
+                    "files": ["src/lib.rs"]
+                }
+            }),
+        };
+
+        assert_ne!(
+            compute_events_fingerprint(&[event_a]),
+            compute_events_fingerprint(&[event_b])
         );
     }
 

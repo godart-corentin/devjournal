@@ -413,6 +413,38 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_repo_backfills_sem_data_for_existing_commit() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        make_test_repo_with_commit(&dir, "Initial commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+
+        let initial_extractor = StubSemExtractor::new(vec![Ok(None)]);
+        poll_repo_with_extractor(&repo_config, &conn, None, &initial_extractor).unwrap();
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].data.get("sem").is_none());
+
+        let enriching_extractor = StubSemExtractor::new(vec![Ok(Some(sample_sem_metadata()))]);
+        let count =
+            sync_repo_with_extractor(&repo_config, &conn, None, &enriching_extractor).unwrap();
+        assert_eq!(count, 1);
+
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].data["sem"]["summary"],
+            sample_sem_metadata().summary
+        );
+    }
+
+    #[test]
     fn test_poll_new_repo_omits_sem_data_when_unavailable() {
         let dir = TempDir::new().unwrap();
         let conn = make_test_conn();
