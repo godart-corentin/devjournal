@@ -96,6 +96,9 @@ enum Commands {
         /// End of date range (YYYY-MM-DD), used with --from
         #[arg(long)]
         to: Option<String>,
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: Format,
     },
     /// Print the path to the config file
     Config,
@@ -473,7 +476,12 @@ fn main() -> Result<()> {
 
         Some(Commands::Update) => update::run_update()?,
 
-        Some(Commands::Log { date, from, to }) => {
+        Some(Commands::Log {
+            date,
+            from,
+            to,
+            format,
+        }) => {
             let conn = db::open()?;
             let (events, label) = match (date, from, to) {
                 (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
@@ -494,21 +502,54 @@ fn main() -> Result<()> {
                     (events, date)
                 }
             };
-            if events.is_empty() {
-                println!("No events recorded for {}", label);
-            } else {
-                for e in &events {
-                    println!(
-                        "[{}] {} — {}",
-                        e.timestamp,
-                        e.repo_name.as_deref().unwrap_or(&e.repo_path),
-                        e.data["message"].as_str().unwrap_or("?")
-                    );
+            match format {
+                Format::Json => {
+                    print_events_json(&events)?;
                 }
-                println!("\n{} event(s) total", events.len());
+                Format::Markdown => {
+                    if events.is_empty() {
+                        println!("No events recorded for {}", label);
+                    } else {
+                        for e in &events {
+                            println!(
+                                "[{}] {} — {}",
+                                e.timestamp,
+                                e.repo_name.as_deref().unwrap_or(&e.repo_path),
+                                e.data["message"].as_str().unwrap_or("?")
+                            );
+                        }
+                        println!("\n{} event(s) total", events.len());
+                    }
+                }
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_command_accepts_json_format() {
+        let cli =
+            Cli::try_parse_from(["devjournal", "log", "2026-04-03", "--format", "json"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Log {
+                date,
+                from,
+                to,
+                format,
+            }) => {
+                assert_eq!(date.as_deref(), Some("2026-04-03"));
+                assert!(from.is_none());
+                assert!(to.is_none());
+                assert!(matches!(format, Format::Json));
+            }
+            _ => panic!("expected log command"),
+        }
+    }
 }
