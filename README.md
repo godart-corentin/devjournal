@@ -32,6 +32,14 @@ curl -fsSL https://raw.githubusercontent.com/godart-corentin/dev-journal/main/in
 
 This downloads the latest pre-built binary to `~/.local/bin`. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
 
+**Homebrew:**
+
+The repository now includes a source-build formula at `Formula/devjournal.rb` that is ready to live in a tap and is shaped for a future `homebrew-core` submission.
+
+Short term, Homebrew expects that formula to live in a tap, not be installed directly from a local repo path.
+
+Long term, plain `brew install devjournal` will require a successful `homebrew-core` submission. For that, the project needs to keep tagged releases, GitHub source archives, and `Cargo.toml` versioning aligned.
+
 **Update:**
 
 ```bash
@@ -46,6 +54,17 @@ cd dev-journal
 cargo build --release
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
+
+## Homebrew roadmap
+
+The repository includes [`Formula/devjournal.rb`](Formula/devjournal.rb) as the starting point for a future `homebrew-core` formula.
+
+Before submitting to `homebrew-core`, make sure:
+
+- the git tag, GitHub release, and `Cargo.toml` version all match
+- the source tarball URL and SHA256 are updated for the new release
+- `brew audit --strict --new devjournal` passes cleanly
+- `brew test devjournal` passes on a fresh install
 
 ## Setup
 
