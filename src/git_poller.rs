@@ -4,7 +4,7 @@ use git2::{Diff, DiffDelta, DiffFindOptions, DiffFormat, Repository, Sort};
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Once;
 
 use crate::config::RepoConfig;
@@ -52,6 +52,9 @@ fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
     let head_commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
     let head_hash = head_commit.id().to_string();
     let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+    let reachable_hashes = collect_reachable_hashes(&repo, &head_hash)?;
+
+    db::prune_unreachable_commit_events(conn, &repo_config.path, &reachable_hashes)?;
 
     let all_commits = collect_new_commits(&repo, &head_hash, None)?;
 
@@ -98,6 +101,9 @@ fn poll_repo_with_extractor<E: SemExtractor + ?Sized>(
     let head_hash = head_commit.id().to_string();
 
     let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+    let reachable_hashes = collect_reachable_hashes(&repo, &head_hash)?;
+
+    db::prune_unreachable_commit_events(conn, &repo_config.path, &reachable_hashes)?;
 
     let poll_state = db::get_poll_state(conn, &repo_config.path)?;
 
@@ -216,6 +222,19 @@ fn collect_new_commits(
     }
 
     Ok(commits)
+}
+
+fn collect_reachable_hashes(repo: &Repository, head_hash: &str) -> Result<HashSet<String>> {
+    let mut revwalk = repo.revwalk()?;
+    revwalk.set_sorting(Sort::TIME)?;
+    revwalk.push(repo.revparse_single(head_hash)?.id())?;
+
+    let mut hashes = HashSet::new();
+    for oid in revwalk {
+        hashes.insert(oid?.to_string()[..8].to_string());
+    }
+
+    Ok(hashes)
 }
 
 fn build_commit_event<E: SemExtractor + ?Sized>(
@@ -509,7 +528,7 @@ mod tests {
     use super::*;
     use crate::sem::{SemEntity, SemExtractor, SemMetadata};
     use anyhow::anyhow;
-    use git2::{Repository, Signature};
+    use git2::{ObjectType, Repository, Signature};
     use std::cell::RefCell;
     use tempfile::TempDir;
 
@@ -534,6 +553,19 @@ mod tests {
 
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
             .unwrap();
+    }
+
+    fn write_file_and_stage(repo: &Repository, path: &str, contents: &str) {
+        let repo_root = repo.workdir().unwrap();
+        let file_path = repo_root.join(path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&file_path, contents).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
     }
 
     fn make_test_conn() -> Connection {
@@ -949,5 +981,57 @@ mod tests {
             second_polled_at > first_polled_at,
             "last_polled_at should be updated even when no new commits"
         );
+    }
+
+    #[test]
+    fn test_poll_prunes_unreachable_commits_after_history_rewrite() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        write_file_and_stage(&repo, "src.txt", "one\n");
+        commit_in_repo(&repo, "First commit");
+
+        write_file_and_stage(&repo, "src.txt", "one\ntwo\n");
+        commit_in_repo(&repo, "Second commit");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+
+        sync_repo(&repo_config, &conn, None).unwrap();
+
+        let second_parent = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .parent(0)
+            .unwrap();
+        let target = repo
+            .find_object(second_parent.id(), Some(ObjectType::Commit))
+            .unwrap();
+        repo.reset(&target, git2::ResetType::Hard, None).unwrap();
+
+        write_file_and_stage(&repo, "src.txt", "one\ntwo\n");
+        commit_in_repo(&repo, "Squashed commit");
+
+        let count = poll_repo(&repo_config, &conn, None).unwrap();
+        assert_eq!(count, 2);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .any(|event| event.data["message"] == "First commit"));
+        assert!(events
+            .iter()
+            .any(|event| event.data["message"] == "Squashed commit"));
+        assert!(!events
+            .iter()
+            .any(|event| event.data["message"] == "Second commit"));
     }
 }

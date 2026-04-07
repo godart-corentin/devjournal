@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub fn data_dir() -> PathBuf {
@@ -357,6 +358,39 @@ pub fn prune_events_before(conn: &Connection, before_date: &str) -> Result<usize
     Ok(deleted)
 }
 
+pub fn prune_unreachable_commit_events(
+    conn: &Connection,
+    repo_path: &str,
+    reachable_hashes: &HashSet<String>,
+) -> Result<usize> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT commit_hash
+         FROM events
+         WHERE repo_path = ?1
+           AND event_type = 'commit'
+           AND commit_hash IS NOT NULL",
+    )?;
+    let rows = stmt.query_map(params![repo_path], |row| row.get::<_, String>(0))?;
+
+    let mut deleted = 0;
+    for row in rows {
+        let commit_hash = row?;
+        if reachable_hashes.contains(&commit_hash) {
+            continue;
+        }
+
+        deleted += conn.execute(
+            "DELETE FROM events
+             WHERE repo_path = ?1
+               AND event_type = 'commit'
+               AND commit_hash = ?2",
+            params![repo_path, commit_hash],
+        )?;
+    }
+
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +721,59 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         let gone = get_events_for_date(&conn, "2025-01-01").unwrap();
         assert_eq!(gone.len(), 0);
+    }
+
+    #[test]
+    fn test_prune_unreachable_commit_events_removes_only_orphaned_commit_rows() {
+        let conn = test_conn();
+        let kept = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T10:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "keep1111", "message": "keep"}),
+        };
+        let removed = Event {
+            id: None,
+            repo_path: "/repo/a".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T11:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "drop2222", "message": "drop"}),
+        };
+        let other_repo = Event {
+            id: None,
+            repo_path: "/repo/b".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-03-25T12:00:00Z".to_string(),
+            data: serde_json::json!({"hash": "drop2222", "message": "other repo"}),
+        };
+
+        insert_event(&conn, &kept).unwrap();
+        insert_event(&conn, &removed).unwrap();
+        insert_event(&conn, &other_repo).unwrap();
+
+        let deleted = prune_unreachable_commit_events(
+            &conn,
+            "/repo/a",
+            &HashSet::from(["keep1111".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(deleted, 1);
+
+        let repo_a = get_events_for_date(&conn, "2026-03-25").unwrap();
+        assert!(repo_a
+            .iter()
+            .any(|event| event.repo_path == "/repo/a" && event.data["hash"] == "keep1111"));
+        assert!(!repo_a
+            .iter()
+            .any(|event| event.repo_path == "/repo/a" && event.data["hash"] == "drop2222"));
+        assert!(repo_a
+            .iter()
+            .any(|event| event.repo_path == "/repo/b" && event.data["hash"] == "drop2222"));
     }
 
     #[test]
