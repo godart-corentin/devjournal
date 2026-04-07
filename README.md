@@ -34,11 +34,16 @@ This downloads the latest pre-built binary to `~/.local/bin`. Set `DEVJOURNAL_IN
 
 **Homebrew:**
 
-The repository now includes a source-build formula at `Formula/devjournal.rb` that is ready to live in a tap and is shaped for a future `homebrew-core` submission.
+You can install from the dedicated Homebrew tap:
 
-Short term, Homebrew expects that formula to live in a tap, not be installed directly from a local repo path.
+```bash
+brew tap godart-corentin/devjournal
+brew install devjournal
+```
 
-Long term, plain `brew install devjournal` will require a successful `homebrew-core` submission. For that, the project needs to keep tagged releases, GitHub source archives, and `Cargo.toml` versioning aligned.
+The tap repository lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
+
+Long term, plain `brew install devjournal` without adding the custom tap first will require a successful `homebrew-core` submission. For that, the project needs to keep tagged releases, GitHub source archives, and `Cargo.toml` versioning aligned.
 
 **Update:**
 
@@ -57,7 +62,7 @@ cp target/release/devjournal ~/.local/bin/devjournal
 
 ## Homebrew roadmap
 
-The repository includes [`Formula/devjournal.rb`](Formula/devjournal.rb) as the starting point for a future `homebrew-core` formula.
+The repository includes [`Formula/devjournal.rb`](Formula/devjournal.rb), and the dedicated tap lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal). That tap is the recommended Homebrew installation path until a future `homebrew-core` submission.
 
 Before submitting to `homebrew-core`, make sure:
 
