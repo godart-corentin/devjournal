@@ -50,12 +50,48 @@ main() {
     chmod +x "$INSTALL_DIR/devjournal"
 
     echo "Installed devjournal ${tag} to ${INSTALL_DIR}/devjournal"
+    install_sem "$tmpdir"
 
     # PATH hint
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
         *) echo "Note: Add ${INSTALL_DIR} to your PATH if not already done." ;;
     esac
+}
+
+install_sem() {
+    tmpdir="$1"
+
+    if [ -x "${INSTALL_DIR}/sem" ] || command -v sem >/dev/null 2>&1; then
+        echo "sem already available."
+        return 0
+    fi
+
+    echo "Installing semantic enrichment helper (sem) when possible..."
+
+    if command -v brew >/dev/null 2>&1; then
+        if brew install sem-cli; then
+            echo "Installed sem via Homebrew."
+            return 0
+        fi
+        echo "Warning: Homebrew sem-cli install failed." >&2
+    fi
+
+    if command -v cargo >/dev/null 2>&1; then
+        sem_root="${tmpdir}/sem-root"
+        if cargo install --root "$sem_root" sem-cli >/dev/null 2>&1; then
+            if [ -f "${sem_root}/bin/sem" ]; then
+                mv "${sem_root}/bin/sem" "${INSTALL_DIR}/sem"
+                chmod +x "${INSTALL_DIR}/sem"
+                echo "Installed sem to ${INSTALL_DIR}/sem via cargo."
+                return 0
+            fi
+        fi
+        echo "Warning: cargo install sem-cli failed." >&2
+    fi
+
+    echo "Warning: sem could not be installed automatically." >&2
+    echo "You can continue with reduced-fidelity summaries, or install sem-cli manually and run \`devjournal sync\` later." >&2
 }
 
 err() {

@@ -31,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/godart-corentin/dev-journal/main/in
 ```
 
 This downloads the latest pre-built binary to `~/.local/bin`. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
+The installer also tries to provision `sem` automatically when Homebrew or Cargo is available.
 
 **Homebrew:**
 
@@ -39,7 +40,10 @@ You can install from the dedicated Homebrew tap:
 ```bash
 brew tap godart-corentin/devjournal
 brew install devjournal
+brew install sem-cli
 ```
+
+Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata.
 
 The tap repository lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
 
@@ -79,7 +83,7 @@ Before submitting to `homebrew-core`, make sure:
 devjournal init
 ```
 
-This walks you through author name, LLM provider, API key, and model selection, then optionally adds the current directory as a watched repo. You can edit the config file directly at any time (see [Configuration](#configuration)).
+This walks you through author name, LLM provider, API key, and model selection, then optionally adds the current directory as a watched repo. It also reports whether semantic enrichment is active, unavailable, or degraded. You can edit the config file directly at any time (see [Configuration](#configuration)).
 
 **2. Add repositories to watch:**
 
@@ -113,7 +117,7 @@ devjournal today
 | `devjournal start`                                       | Start the background polling daemon                                          |
 | `devjournal stop`                                        | Stop the daemon                                                              |
 | `devjournal sync [name]`                                 | Sync full git history into the DB (see below)                                |
-| `devjournal status`                                      | Show daemon state, watched repos, and today's event count                    |
+| `devjournal status`                                      | Show daemon state, semantic enrichment health, watched repos, and today's event count |
 | `devjournal today`                                       | Generate and print today's summary                                           |
 | `devjournal summary [YYYY-MM-DD]`                        | Generate and print the summary for a specific date                           |
 | `devjournal summary --from YYYY-MM-DD [--to YYYY-MM-DD]` | Generate a summary for a date range (defaults to today if `--to` is omitted) |
@@ -123,7 +127,7 @@ devjournal today
 | `devjournal log [YYYY-MM-DD]`                            | Show raw recorded events (useful for debugging, supports `--format json`)    |
 | `devjournal log --from YYYY-MM-DD [--to YYYY-MM-DD]`     | Show raw events for a date range (supports `--format json`)                  |
 | `devjournal list`                                        | List all watched repositories                                                |
-| `devjournal doctor`                                      | Run diagnostic checks on your setup                                          |
+| `devjournal doctor`                                      | Run diagnostic checks on your setup, including semantic enrichment health    |
 | `devjournal prune <days>`                                | Delete events older than N days                                              |
 | `devjournal completions <shell>`                         | Generate shell completions (bash, zsh, fish)                                 |
 | `devjournal config`                                      | Print the path to the config file                                            |
@@ -216,7 +220,7 @@ devjournal sync /path/to/repo
 
 Running `sync` multiple times is safe — duplicate commits are silently ignored. The daemon can continue running alongside it.
 
-If the optional `sem` CLI is installed and available on your `PATH`, devjournal also stores semantic diff metadata for commits and uses it to generate more concrete summaries. Re-running `devjournal sync` can backfill that metadata for existing commits, and cached summaries are refreshed automatically when the underlying event payload changes.
+If `sem` is available, devjournal stores semantic diff metadata for commits and uses it to generate more concrete summaries. Every commit also stores compact structured diff metadata, and the summarizer only falls back to raw patch excerpts for small low-signal commits when semantic metadata is missing. Re-running `devjournal sync` can backfill semantic metadata for existing commits, and cached summaries are refreshed automatically when the underlying event payload changes.
 
 ## Summary format
 
@@ -226,6 +230,7 @@ Summaries follow these rules, enforced via the LLM prompt:
 - Action-oriented bullet points: what was done, fixed, tested, or shipped
 - Ticket/issue references preserved (e.g. `TT-1234`, `PROJ-567`)
 - When semantic metadata is available, summaries prefer concrete entities/files changed over commit-message-only guesses
+- When semantic metadata is unavailable, summaries fall back to structured diff metadata before using a small patch excerpt
 - No branch names, file counts, or other git metadata
 - Saved to the summaries directory (`YYYY-MM-DD.md` for single days, `YYYY-MM-DD_to_YYYY-MM-DD.md` for ranges)
 
@@ -275,4 +280,4 @@ Ollama must be running before you generate a summary. Start it with `ollama serv
 Cursor must be installed and the `cursor` binary must be on your PATH. Install from [cursor.com](https://cursor.com) and ensure the CLI is available: `cursor --version`. No API key is required — Cursor uses your existing account auth.
 
 **Warnings about `sem` extraction?**
-Semantic enrichment is optional. If `sem` is not installed, not on your `PATH`, or fails for a commit, devjournal still records the commit and generates summaries using the regular git metadata. Install `sem` and run `devjournal sync` to backfill semantic metadata for existing commits.
+If `sem` is not installed or temporarily fails for a commit, devjournal still records the commit and generates summaries using structured git diff metadata. Install or repair `sem`, then run `devjournal sync` to backfill semantic metadata for existing commits.

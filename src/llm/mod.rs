@@ -79,7 +79,8 @@ pub fn build_prompt_with_custom(
             let message = e.data["message"].as_str().unwrap_or("no message");
             let hash = e.data["hash"].as_str().unwrap_or("?");
             lines.push(format!("  - [{}] ({}) {}", hash, branch, message));
-            if let Some(sem) = sem_from_value(&e.data["sem"]) {
+            let sem = sem_from_value(&e.data["sem"]);
+            if let Some(sem) = sem {
                 lines.push(format!("    semantic summary: {}", sem.summary));
 
                 if !sem.entities.is_empty() {
@@ -100,6 +101,47 @@ pub fn build_prompt_with_custom(
 
                 if !sem.files.is_empty() {
                     lines.push(format!("    files: {}", sem.files.join(", ")));
+                }
+            } else if let Some(diff) = e.data.get("diff") {
+                if let Some(stat_summary) =
+                    diff.get("stat_summary").and_then(|value| value.as_str())
+                {
+                    lines.push(format!("    diff summary: {}", stat_summary));
+                }
+
+                if let Some(files) = diff.get("files").and_then(|value| value.as_array()) {
+                    let files = files
+                        .iter()
+                        .filter_map(|file| {
+                            let path = file.get("path")?.as_str()?;
+                            let status = file
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("modified");
+                            let additions = file
+                                .get("additions")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0);
+                            let deletions = file
+                                .get("deletions")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0);
+                            Some(format!(
+                                "{} {} (+{}/-{})",
+                                status, path, additions, deletions
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    if !files.is_empty() {
+                        lines.push(format!("    diff files: {}", files.join(", ")));
+                    }
+                }
+
+                if let Some(patch_excerpt) =
+                    diff.get("patch_excerpt").and_then(|value| value.as_str())
+                {
+                    lines.push("    patch excerpt:".to_string());
+                    lines.push(format!("```diff\n{}\n```", patch_excerpt));
                 }
             }
         }
@@ -139,6 +181,8 @@ pub fn build_prompt_with_custom(
         }
         lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
         lines.push("- When semantic summary, entities, or files are present for a commit, prefer those concrete signals to infer the real outcome instead of relying only on the commit message.".to_string());
+        lines.push("- When semantic metadata is missing, use structured diff summaries and diff file lists before falling back to any raw patch excerpt.".to_string());
+        lines.push("- Treat any patch excerpt as supporting evidence only. Do not narrate the patch line-by-line in the final summary.".to_string());
         lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
         lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
         lines.push(
@@ -161,7 +205,13 @@ mod tests {
     use crate::db::Event;
     use crate::sem::{SemEntity, SemMetadata};
 
-    fn make_event(repo_name: &str, message: &str, branch: &str, sem: Option<SemMetadata>) -> Event {
+    fn make_event(
+        repo_name: &str,
+        message: &str,
+        branch: &str,
+        sem: Option<SemMetadata>,
+        diff: Option<serde_json::Value>,
+    ) -> Event {
         let mut data = serde_json::json!({
             "hash": "abc123",
             "author": "Dev",
@@ -173,6 +223,9 @@ mod tests {
         });
         if let Some(sem) = sem {
             data["sem"] = serde_json::to_value(sem).unwrap();
+        }
+        if let Some(diff) = diff {
+            data["diff"] = diff;
         }
 
         Event {
@@ -208,9 +261,9 @@ mod tests {
     #[test]
     fn test_prompt_groups_by_project() {
         let events = vec![
-            make_event("project-alpha", "Fix TT-1234 bug", "main", None),
-            make_event("project-beta", "Add feature X", "feature/x", None),
-            make_event("project-alpha", "Refactor auth", "main", None),
+            make_event("project-alpha", "Fix TT-1234 bug", "main", None, None),
+            make_event("project-beta", "Add feature X", "feature/x", None, None),
+            make_event("project-alpha", "Refactor auth", "main", None, None),
         ];
         let prompt = build_prompt(&events, "2026-03-23");
         assert!(prompt.contains("Project: project-alpha"));
@@ -221,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_prompt_no_metadata_instructions() {
-        let events = vec![make_event("proj", "commit msg", "main", None)];
+        let events = vec![make_event("proj", "commit msg", "main", None, None)];
         let prompt = build_prompt(&events, "2026-03-23");
         assert!(prompt.contains("Do NOT mention branch names"));
         assert!(prompt.contains("OUTCOMES"));
@@ -232,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_build_prompt_with_custom_system_prompt() {
-        let events = vec![make_event("proj", "commit msg", "main", None)];
+        let events = vec![make_event("proj", "commit msg", "main", None, None)];
         let custom = "Write a haiku summarizing the work.";
         let prompt = build_prompt_with_custom(&events, "2026-03-23", Some(custom));
         assert!(prompt.contains("Project: proj"));
@@ -249,6 +302,7 @@ mod tests {
             "Refactor auth",
             "main",
             Some(sample_sem()),
+            None,
         )];
         let prompt = build_prompt(&events, "2026-03-23");
 
@@ -256,5 +310,72 @@ mod tests {
         assert!(prompt.contains("entities: function validate_token [added]"));
         assert!(prompt.contains("change types: added, modified"));
         assert!(prompt.contains("files: src/auth.rs"));
+    }
+
+    #[test]
+    fn test_prompt_includes_structured_diff_when_sem_missing() {
+        let events = vec![make_event(
+            "proj",
+            "commit msg",
+            "main",
+            None,
+            Some(serde_json::json!({
+                "stat_summary": "2 files changed, 12 insertions(+), 3 deletions(-)",
+                "files": [
+                    {
+                        "path": "src/auth.rs",
+                        "status": "modified",
+                        "additions": 10,
+                        "deletions": 2
+                    },
+                    {
+                        "path": "src/token.rs",
+                        "status": "added",
+                        "additions": 2,
+                        "deletions": 1
+                    }
+                ]
+            })),
+        )];
+
+        let prompt = build_prompt(&events, "2026-03-23");
+
+        assert!(prompt.contains("diff summary: 2 files changed, 12 insertions(+), 3 deletions(-)"));
+        assert!(prompt
+            .contains("diff files: modified src/auth.rs (+10/-2), added src/token.rs (+2/-1)"));
+    }
+
+    #[test]
+    fn test_prompt_only_includes_patch_excerpt_without_sem() {
+        let diff = serde_json::json!({
+            "stat_summary": "1 file changed, 4 insertions(+), 1 deletion(-)",
+            "files": [
+                {
+                    "path": "src/auth.rs",
+                    "status": "modified",
+                    "additions": 4,
+                    "deletions": 1
+                }
+            ],
+            "patch_excerpt": "@@ -1,2 +1,5 @@\n-fn auth() {}\n+fn auth() {\n+  validate();\n+}"
+        });
+
+        let no_sem_prompt = build_prompt(
+            &[make_event("proj", "wip", "main", None, Some(diff.clone()))],
+            "2026-03-23",
+        );
+        assert!(no_sem_prompt.contains("patch excerpt:"));
+
+        let with_sem_prompt = build_prompt(
+            &[make_event(
+                "proj",
+                "wip",
+                "main",
+                Some(sample_sem()),
+                Some(diff),
+            )],
+            "2026-03-23",
+        );
+        assert!(!with_sem_prompt.contains("patch excerpt:"));
     }
 }

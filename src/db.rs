@@ -110,12 +110,12 @@ fn merged_event_data(
     };
 
     let existing_data: serde_json::Value = serde_json::from_str(&existing_data)?;
-    if incoming.get("sem").is_some() || existing_data.get("sem").is_none() {
-        return Ok(incoming.clone());
-    }
-
     let mut merged = incoming.clone();
-    merged["sem"] = existing_data["sem"].clone();
+    for key in ["sem", "diff"] {
+        if merged.get(key).is_none() && existing_data.get(key).is_some() {
+            merged[key] = existing_data[key].clone();
+        }
+    }
     Ok(merged)
 }
 

@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
 use chrono::Local;
-use git2::{Repository, Sort};
+use git2::{Diff, DiffDelta, DiffFindOptions, DiffFormat, Repository, Sort};
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Once;
 
 use crate::config::RepoConfig;
 use crate::db::{self, Event};
 use crate::sem::{CliSemExtractor, SemExtractor, SemMetadata};
+
+static SEM_UNAVAILABLE_WARNING: Once = Once::new();
 
 fn open_repo(path: &str) -> Result<Repository> {
     // Disable ownership check to support repos in directories owned by a different
@@ -139,6 +144,25 @@ struct CommitInfo {
     files_changed: usize,
     insertions: usize,
     deletions: usize,
+    diff: DiffContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DiffContext {
+    stat_summary: String,
+    files: Vec<DiffFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch_excerpt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DiffFile {
+    path: String,
+    status: String,
+    additions: usize,
+    deletions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rename_from: Option<String>,
 }
 
 fn collect_new_commits(
@@ -173,7 +197,10 @@ fn collect_new_commits(
             .unwrap_or_else(Local::now)
             .to_rfc3339();
 
-        let (files_changed, insertions, deletions) = diff_stats(repo, &commit);
+        let diff = diff_context(repo, &commit, &message);
+        let files_changed = diff.files.len();
+        let insertions = diff.files.iter().map(|file| file.additions).sum();
+        let deletions = diff.files.iter().map(|file| file.deletions).sum();
 
         commits.push(CommitInfo {
             hash: oid.to_string()[..8].to_string(),
@@ -184,28 +211,11 @@ fn collect_new_commits(
             files_changed,
             insertions,
             deletions,
+            diff,
         });
     }
 
     Ok(commits)
-}
-
-fn diff_stats(repo: &Repository, commit: &git2::Commit) -> (usize, usize, usize) {
-    let tree = commit.tree().ok();
-    let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
-
-    let diff = match (tree, parent_tree) {
-        (Some(t), Some(pt)) => repo.diff_tree_to_tree(Some(&pt), Some(&t), None).ok(),
-        (Some(t), None) => repo.diff_tree_to_tree(None, Some(&t), None).ok(),
-        _ => None,
-    };
-
-    if let Some(diff) = diff {
-        if let Ok(stats) = diff.stats() {
-            return (stats.files_changed(), stats.insertions(), stats.deletions());
-        }
-    }
-    (0, 0, 0)
 }
 
 fn build_commit_event<E: SemExtractor + ?Sized>(
@@ -222,6 +232,7 @@ fn build_commit_event<E: SemExtractor + ?Sized>(
         "files_changed": commit_info.files_changed,
         "insertions": commit_info.insertions,
         "deletions": commit_info.deletions,
+        "diff": serde_json::to_value(&commit_info.diff).expect("diff metadata should serialize"),
     });
 
     if let Some(sem) = extract_sem_metadata(extractor, &repo_config.path, &commit_info.full_hash) {
@@ -246,12 +257,238 @@ fn extract_sem_metadata<E: SemExtractor + ?Sized>(
     match extractor.extract(repo_path, commit_hash) {
         Ok(sem) => sem,
         Err(err) => {
-            eprintln!(
-                "Warning: failed to extract sem data for commit {}: {:#}",
-                commit_hash, err
-            );
+            let message = format!("{:#}", err);
+            if message.contains("sem not found") {
+                SEM_UNAVAILABLE_WARNING.call_once(|| {
+                    eprintln!("Warning: {}.", message);
+                });
+            } else {
+                eprintln!(
+                    "Warning: failed to extract sem data for commit {}: {}",
+                    commit_hash, message
+                );
+            }
             None
         }
+    }
+}
+
+fn diff_context(repo: &Repository, commit: &git2::Commit<'_>, message: &str) -> DiffContext {
+    let Some(mut diff) = git_diff(repo, commit) else {
+        return DiffContext {
+            stat_summary: "0 files changed".to_string(),
+            files: Vec::new(),
+            patch_excerpt: None,
+        };
+    };
+
+    let mut find_opts = DiffFindOptions::new();
+    find_opts.renames(true);
+    let _ = diff.find_similar(Some(&mut find_opts));
+
+    let stats = diff.stats().ok();
+    let stat_summary = stats
+        .as_ref()
+        .map(|stats| {
+            format_stat_summary(stats.files_changed(), stats.insertions(), stats.deletions())
+        })
+        .unwrap_or_else(|| "0 files changed".to_string());
+
+    let mut files = Vec::new();
+    let mut indexes = HashMap::<String, usize>::new();
+    for delta in diff.deltas() {
+        let key = delta_key(&delta);
+        let path = display_path(delta.new_file().path().or_else(|| delta.old_file().path()));
+        let rename_from = rename_from(&delta);
+        indexes.insert(key, files.len());
+        files.push(DiffFile {
+            path,
+            status: delta_status(&delta),
+            additions: 0,
+            deletions: 0,
+            rename_from,
+        });
+    }
+
+    let _ = diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        if let Some(index) = indexes.get(&delta_key(&_delta)).copied() {
+            match line.origin() {
+                '+' => files[index].additions += 1,
+                '-' => files[index].deletions += 1,
+                _ => {}
+            }
+        }
+        true
+    });
+
+    let patch_excerpt = if should_capture_patch_excerpt(
+        message,
+        files.len(),
+        total_insertions(&files),
+        total_deletions(&files),
+    ) {
+        capture_patch_excerpt(&diff)
+    } else {
+        None
+    };
+
+    DiffContext {
+        stat_summary,
+        files,
+        patch_excerpt,
+    }
+}
+
+fn git_diff<'repo>(repo: &'repo Repository, commit: &git2::Commit<'repo>) -> Option<Diff<'repo>> {
+    let tree = commit.tree().ok();
+    let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+    match (tree, parent_tree) {
+        (Some(t), Some(pt)) => repo.diff_tree_to_tree(Some(&pt), Some(&t), None).ok(),
+        (Some(t), None) => repo.diff_tree_to_tree(None, Some(&t), None).ok(),
+        _ => None,
+    }
+}
+
+fn format_stat_summary(files_changed: usize, insertions: usize, deletions: usize) -> String {
+    let mut parts = vec![format!(
+        "{} file{} changed",
+        files_changed,
+        if files_changed == 1 { "" } else { "s" }
+    )];
+
+    if insertions > 0 {
+        parts.push(format!(
+            "{} insertion{}(+)",
+            insertions,
+            if insertions == 1 { "" } else { "s" }
+        ));
+    }
+    if deletions > 0 {
+        parts.push(format!(
+            "{} deletion{}(-)",
+            deletions,
+            if deletions == 1 { "" } else { "s" }
+        ));
+    }
+
+    parts.join(", ")
+}
+
+fn delta_key(delta: &DiffDelta<'_>) -> String {
+    format!(
+        "{}|{}|{:?}",
+        display_path(delta.old_file().path()),
+        display_path(delta.new_file().path()),
+        delta.status()
+    )
+}
+
+fn delta_status(delta: &DiffDelta<'_>) -> String {
+    match delta.status() {
+        git2::Delta::Added => "added",
+        git2::Delta::Deleted => "deleted",
+        git2::Delta::Renamed => "renamed",
+        git2::Delta::Copied => "copied",
+        git2::Delta::Typechange => "typechanged",
+        _ => "modified",
+    }
+    .to_string()
+}
+
+fn rename_from(delta: &DiffDelta<'_>) -> Option<String> {
+    if matches!(delta.status(), git2::Delta::Renamed | git2::Delta::Copied) {
+        let old = delta.old_file().path();
+        let new = delta.new_file().path();
+        if old != new {
+            return Some(display_path(old));
+        }
+    }
+    None
+}
+
+fn display_path(path: Option<&std::path::Path>) -> String {
+    path.map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<unknown>".to_string())
+}
+
+fn total_insertions(files: &[DiffFile]) -> usize {
+    files.iter().map(|file| file.additions).sum()
+}
+
+fn total_deletions(files: &[DiffFile]) -> usize {
+    files.iter().map(|file| file.deletions).sum()
+}
+
+fn should_capture_patch_excerpt(
+    message: &str,
+    files_changed: usize,
+    insertions: usize,
+    deletions: usize,
+) -> bool {
+    files_changed > 0
+        && files_changed <= 3
+        && insertions + deletions <= 60
+        && is_low_signal_message(message)
+}
+
+fn is_low_signal_message(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "wip" | "fix" | "update" | "changes" | "misc" | "stuff" | "cleanup" | "tmp"
+    ) || normalized.len() <= 6
+}
+
+fn capture_patch_excerpt(diff: &Diff<'_>) -> Option<String> {
+    const MAX_LINES: usize = 24;
+    const MAX_CHARS: usize = 1500;
+
+    let mut excerpt = String::new();
+    let mut lines = 0usize;
+
+    let _ = diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        if lines >= MAX_LINES || excerpt.len() >= MAX_CHARS {
+            return false;
+        }
+
+        let content = std::str::from_utf8(line.content()).unwrap_or_default();
+        if content.starts_with("diff --git")
+            || content.starts_with("index ")
+            || content.starts_with("--- ")
+            || content.starts_with("+++ ")
+        {
+            return true;
+        }
+
+        let remaining = MAX_CHARS.saturating_sub(excerpt.len());
+        if remaining == 0 {
+            return false;
+        }
+
+        let rendered = if matches!(line.origin(), '+' | '-' | ' ' | '@')
+            && !content.starts_with(line.origin())
+        {
+            format!("{}{}", line.origin(), content)
+        } else {
+            content.to_string()
+        };
+
+        let slice = if rendered.len() > remaining {
+            &rendered[..remaining]
+        } else {
+            rendered.as_str()
+        };
+        excerpt.push_str(slice);
+        lines += 1;
+        true
+    });
+
+    let trimmed = excerpt.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
 }
 
@@ -410,6 +647,97 @@ mod tests {
             events[0].data["sem"]["change_types"],
             json!(["added", "modified"])
         );
+    }
+
+    #[test]
+    fn test_sync_repo_records_structured_diff_data() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("src.txt"), "before\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "Initial commit");
+
+        std::fs::write(dir.path().join("src.txt"), "before\nafter\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "Update file");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Ok(None), Ok(None)]);
+
+        let count = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(count, 2);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.data["message"] == "Update file")
+            .unwrap();
+
+        assert_eq!(
+            event.data["diff"]["stat_summary"],
+            "1 file changed, 1 insertion(+)"
+        );
+        assert_eq!(event.data["diff"]["files"][0]["path"], "src.txt");
+        assert_eq!(event.data["diff"]["files"][0]["status"], "modified");
+        assert_eq!(event.data["diff"]["files"][0]["additions"], 1);
+        assert_eq!(event.data["diff"]["files"][0]["deletions"], 0);
+    }
+
+    #[test]
+    fn test_sync_repo_records_patch_excerpt_for_small_vague_commit() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("src.txt"), "before\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "Initial commit");
+
+        std::fs::write(dir.path().join("src.txt"), "before\nafter\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "wip");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Ok(None), Ok(None)]);
+
+        sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.data["message"] == "wip")
+            .unwrap();
+
+        assert!(event.data["diff"]["patch_excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("+after"));
     }
 
     #[test]

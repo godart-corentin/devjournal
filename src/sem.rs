@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,30 @@ pub trait SemExtractor {
     fn extract(&self, repo_path: &str, commit_hash: &str) -> Result<Option<SemMetadata>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemIntegrationStatus {
+    Active,
+    Unavailable,
+    Degraded,
+}
+
+impl SemIntegrationStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Unavailable => "unavailable",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemProbe {
+    pub status: SemIntegrationStatus,
+    pub detail: String,
+    pub install_hint: String,
+}
+
 pub struct CliSemExtractor;
 
 impl CliSemExtractor {
@@ -37,11 +62,17 @@ impl CliSemExtractor {
 
 impl SemExtractor for CliSemExtractor {
     fn extract(&self, repo_path: &str, commit_hash: &str) -> Result<Option<SemMetadata>> {
-        let output = Command::new("sem")
+        let sem_bin = sem_binary();
+        let output = Command::new(&sem_bin)
             .current_dir(repo_path)
             .args(Self::build_args(commit_hash))
             .output()
-            .context("sem not found — install sem and ensure it is on PATH")?;
+            .with_context(|| {
+                format!(
+                    "sem not found — install sem-cli and ensure the `sem` binary is available (try: {})",
+                    install_hint()
+                )
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -60,8 +91,56 @@ pub fn parse_sem_output(stdout: &str) -> Result<Option<SemMetadata>> {
     Ok(normalize_sem_diff(diff))
 }
 
+pub fn probe() -> SemProbe {
+    let install_hint = install_hint();
+    let sem_bin = sem_binary();
+
+    match Command::new(&sem_bin).arg("--version").output() {
+        Ok(output) if output.status.success() => SemProbe {
+            status: SemIntegrationStatus::Active,
+            detail: format!("using {}", sem_bin.display()),
+            install_hint,
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                format!("{} exists but `sem --version` failed", sem_bin.display())
+            } else {
+                format!(
+                    "{} exists but failed health check: {}",
+                    sem_bin.display(),
+                    stderr
+                )
+            };
+            SemProbe {
+                status: SemIntegrationStatus::Degraded,
+                detail,
+                install_hint,
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => SemProbe {
+            status: SemIntegrationStatus::Unavailable,
+            detail: "sem is not installed".to_string(),
+            install_hint,
+        },
+        Err(err) => SemProbe {
+            status: SemIntegrationStatus::Degraded,
+            detail: format!("failed to execute sem: {}", err),
+            install_hint,
+        },
+    }
+}
+
 pub fn from_value(value: &serde_json::Value) -> Option<SemMetadata> {
     serde_json::from_value(value.clone()).ok()
+}
+
+pub fn install_hint() -> String {
+    install_hint_for(
+        std::env::consts::OS,
+        command_exists("brew"),
+        command_exists("cargo"),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +267,56 @@ fn push_unique(items: &mut Vec<String>, value: String) {
     }
 }
 
+fn sem_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("DEVJOURNAL_SEM_BIN") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join(sem_executable_name());
+            if bundled.exists() {
+                return bundled;
+            }
+        }
+    }
+
+    PathBuf::from(sem_executable_name())
+}
+
+fn sem_executable_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "sem.exe"
+    }
+    #[cfg(not(windows))]
+    {
+        "sem"
+    }
+}
+
+fn command_exists(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn install_hint_for(os: &str, has_brew: bool, has_cargo: bool) -> String {
+    if os == "macos" && has_brew {
+        "brew install sem-cli".to_string()
+    } else if has_cargo {
+        "cargo install sem-cli".to_string()
+    } else if has_brew {
+        "brew install sem-cli".to_string()
+    } else {
+        "install sem-cli manually and re-run `devjournal sync`".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +388,26 @@ mod tests {
             CliSemExtractor::build_args("abc1234"),
             vec!["diff", "--commit", "abc1234", "--format", "json"]
         );
+    }
+
+    #[test]
+    fn test_install_hint_prefers_brew_on_macos() {
+        assert_eq!(
+            install_hint_for("macos", true, true),
+            "brew install sem-cli"
+        );
+    }
+
+    #[test]
+    fn test_install_hint_falls_back_to_cargo() {
+        assert_eq!(
+            install_hint_for("linux", false, true),
+            "cargo install sem-cli"
+        );
+    }
+
+    #[test]
+    fn test_install_hint_without_supported_installer() {
+        assert!(install_hint_for("linux", false, false).contains("install sem-cli"));
     }
 }

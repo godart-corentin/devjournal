@@ -112,6 +112,13 @@ pub fn status() -> Result<()> {
         }
     }
 
+    let sem_probe = crate::sem::probe();
+    println!(
+        "semantic enrichment: {} ({})",
+        sem_probe.status.label(),
+        sem_probe.detail
+    );
+
     // Show poll timing info
     if let Ok(conn) = db::open() {
         let config = config::load_or_default();

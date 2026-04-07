@@ -376,6 +376,27 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    // 3c. sem CLI
+                    print!("sem CLI... ");
+                    let sem_probe = sem::probe();
+                    match sem_probe.status {
+                        sem::SemIntegrationStatus::Active => {
+                            println!("ACTIVE — {}", sem_probe.detail)
+                        }
+                        sem::SemIntegrationStatus::Unavailable => {
+                            println!(
+                                "UNAVAILABLE — {} (try: {})",
+                                sem_probe.detail, sem_probe.install_hint
+                            );
+                        }
+                        sem::SemIntegrationStatus::Degraded => {
+                            println!(
+                                "DEGRADED — {} (try: {})",
+                                sem_probe.detail, sem_probe.install_hint
+                            );
+                        }
+                    }
+
                     // 4. Repos
                     if cfg.repos.is_empty() {
                         println!("Repos... NONE configured — use `devjournal add <path>`");

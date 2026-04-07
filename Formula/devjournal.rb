@@ -14,6 +14,16 @@ class Devjournal < Formula
     generate_completions_from_executable(bin/"devjournal", "completions", shells: [:bash, :zsh, :fish])
   end
 
+  def caveats
+    <<~EOS
+      For semantic enrichment, install `sem` as well:
+        brew install sem-cli
+
+      If `sem` is unavailable, devjournal still works and falls back to regular git metadata.
+      Re-run `devjournal sync` after installing `sem` to backfill richer summaries.
+    EOS
+  end
+
   test do
     config_path = shell_output("#{bin}/devjournal config").strip
     assert_match "devjournal", config_path

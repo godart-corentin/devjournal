@@ -281,6 +281,15 @@ pub fn init() -> Result<()> {
 
     println!("\nConfig written to {}", path.display());
     println!("You can edit that file directly to update your settings.");
+    let sem_probe = crate::sem::probe();
+    println!(
+        "Semantic enrichment: {} ({})",
+        sem_probe.status.label(),
+        sem_probe.detail
+    );
+    if sem_probe.status != crate::sem::SemIntegrationStatus::Active {
+        println!("Install hint: {}", sem_probe.install_hint);
+    }
     println!("\nRun `devjournal start` to begin tracking.");
 
     Ok(())
