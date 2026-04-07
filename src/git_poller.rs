@@ -475,7 +475,7 @@ fn capture_patch_excerpt(diff: &Diff<'_>) -> Option<String> {
         };
 
         let slice = if rendered.len() > remaining {
-            &rendered[..remaining]
+            truncate_to_char_boundary(&rendered, remaining)
         } else {
             rendered.as_str()
         };
@@ -490,6 +490,18 @@ fn capture_patch_excerpt(diff: &Diff<'_>) -> Option<String> {
     } else {
         Some(trimmed)
     }
+}
+
+fn truncate_to_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 #[cfg(test)]
@@ -738,6 +750,62 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("+after"));
+    }
+
+    #[test]
+    fn test_sync_repo_does_not_panic_when_patch_excerpt_truncates_multibyte_text() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("src.txt"), "before\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "Initial commit");
+
+        let multibyte_payload = format!("{}{}", "a".repeat(1_490), "‚tail\n");
+        std::fs::write(
+            dir.path().join("src.txt"),
+            format!("before\n{}", multibyte_payload),
+        )
+        .unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("src.txt")).unwrap();
+            index.write().unwrap();
+        }
+        commit_in_repo(&repo, "wip");
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+        let extractor = StubSemExtractor::new(vec![Ok(None), Ok(None)]);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sync_repo_with_extractor(&repo_config, &conn, None, &extractor)
+        }));
+
+        assert!(result.is_ok(), "sync_repo_with_extractor panicked");
+        assert_eq!(result.unwrap().unwrap(), 2);
+
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let events = db::get_events_for_date(&conn, &today).unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.data["message"] == "wip")
+            .unwrap();
+
+        assert!(event.data["diff"]["patch_excerpt"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_truncate_to_char_boundary_avoids_splitting_multibyte_chars() {
+        assert_eq!(truncate_to_char_boundary("ab‚cd", 3), "ab");
+        assert_eq!(truncate_to_char_boundary("ab‚cd", 5), "ab‚");
     }
 
     #[test]
