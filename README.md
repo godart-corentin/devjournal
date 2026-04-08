@@ -31,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/godart-corentin/dev-journal/main/in
 ```
 
 This downloads the latest pre-built binary to `~/.local/bin`. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
+The installer downloads the matching release archive plus its published SHA256 checksum manifest and verifies the archive before extracting it.
 The installer also tries to provision `sem` automatically when Homebrew or Cargo is available.
 
 **Homebrew:**
@@ -54,6 +55,9 @@ Long term, plain `brew install devjournal` without adding the custom tap first w
 ```bash
 devjournal update
 ```
+
+On macOS and Linux, `devjournal update` verifies the downloaded release archive against the published SHA256 checksum manifest before replacing the binary.
+On Windows, self-update is temporarily disabled until the replacement flow is hardened; reinstall from the latest GitHub release instead.
 
 **Build from source** (for contributors, requires Rust):
 

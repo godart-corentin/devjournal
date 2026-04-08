@@ -3,6 +3,7 @@ set -eu
 
 REPO="godart-corentin/dev-journal"
 INSTALL_DIR="${DEVJOURNAL_INSTALL_DIR:-$HOME/.local/bin}"
+CHECKSUMS_ASSET="devjournal-checksums.txt"
 
 main() {
     os=$(uname -s)
@@ -37,12 +38,22 @@ main() {
     # Download and extract
     asset="devjournal-${target}.tar.gz"
     download_url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+    checksums_url="https://github.com/${REPO}/releases/download/${tag}/${CHECKSUMS_ASSET}"
 
     echo "Downloading ${asset}..."
     tmpdir=$(mktemp -d)
     trap 'rm -rf "$tmpdir"' EXIT
 
-    curl -fsSL "$download_url" | tar xz -C "$tmpdir"
+    archive_path="${tmpdir}/${asset}"
+    checksums_path="${tmpdir}/${CHECKSUMS_ASSET}"
+
+    curl -fsSL -o "$archive_path" "$download_url"
+    curl -fsSL -o "$checksums_path" "$checksums_url"
+
+    expected_checksum=$(read_expected_checksum "$asset" "$checksums_path")
+    verify_checksum "$archive_path" "$expected_checksum"
+
+    tar xzf "$archive_path" -C "$tmpdir"
 
     # Install
     mkdir -p "$INSTALL_DIR"
@@ -97,6 +108,55 @@ install_sem() {
 err() {
     echo "Error: $1" >&2
     exit 1
+}
+
+read_expected_checksum() {
+    asset="$1"
+    checksums_path="$2"
+
+    checksum=$(awk -v asset="$asset" '
+        $2 == asset || $2 == "*" asset {
+            print $1
+            exit
+        }
+    ' "$checksums_path")
+
+    if [ -z "$checksum" ]; then
+        err "No checksum found for ${asset}"
+    fi
+
+    printf '%s\n' "$checksum"
+}
+
+verify_checksum() {
+    file_path="$1"
+    expected_checksum="$2"
+    actual_checksum=$(sha256_file "$file_path")
+
+    if [ "$actual_checksum" != "$expected_checksum" ]; then
+        err "Checksum verification failed for ${file_path}"
+    fi
+}
+
+sha256_file() {
+    file_path="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file_path" | awk '{print $1}'
+        return 0
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file_path" | awk '{print $1}'
+        return 0
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file_path" | awk '{print $NF}'
+        return 0
+    fi
+
+    err "No SHA256 tool found (expected one of: sha256sum, shasum, openssl)"
 }
 
 main
