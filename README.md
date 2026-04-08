@@ -99,6 +99,7 @@ devjournal start
 ```
 
 The daemon runs in the background and polls all configured repos on the interval set in your config.
+On Unix, `devjournal start` now fully detaches from the invoking terminal/session, so it keeps running after the shell or terminal window closes.
 
 **4. Generate today's summary:**
 
