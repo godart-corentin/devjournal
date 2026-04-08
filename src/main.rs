@@ -9,6 +9,7 @@ mod update;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use serde::Serialize;
 
 #[derive(Clone, clap::ValueEnum, Default)]
 enum Format {
@@ -142,9 +143,31 @@ enum Commands {
     Update,
 }
 
+#[derive(Serialize)]
+struct JsonEvent<'a> {
+    timestamp: &'a str,
+    repo_path: &'a str,
+    repo_name: Option<&'a str>,
+    event_type: &'a str,
+    payload: &'a serde_json::Value,
+}
+
+fn serialize_events_json(events: &[db::Event]) -> Result<String> {
+    let json: Vec<JsonEvent<'_>> = events
+        .iter()
+        .map(|event| JsonEvent {
+            timestamp: &event.timestamp,
+            repo_path: &event.repo_path,
+            repo_name: event.repo_name.as_deref(),
+            event_type: &event.event_type,
+            payload: &event.data,
+        })
+        .collect();
+    Ok(serde_json::to_string_pretty(&json)?)
+}
+
 fn print_events_json(events: &[db::Event]) -> Result<()> {
-    let json: Vec<&serde_json::Value> = events.iter().map(|e| &e.data).collect();
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", serialize_events_json(events)?);
     Ok(())
 }
 
@@ -553,6 +576,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_log_command_accepts_json_format() {
@@ -573,5 +597,52 @@ mod tests {
             }
             _ => panic!("expected log command"),
         }
+    }
+
+    #[test]
+    fn test_serialize_events_json_includes_stable_event_envelope() {
+        let payload = json!({
+            "hash": "abc123",
+            "message": "Fix stable JSON contract",
+            "branch": "main"
+        });
+        let events = vec![db::Event {
+            id: Some(7),
+            repo_path: "/tmp/dev-journal".to_string(),
+            repo_name: Some("dev-journal".to_string()),
+            event_type: "commit".to_string(),
+            timestamp: "2026-04-03T10:00:00Z".to_string(),
+            data: payload.clone(),
+        }];
+
+        let rendered = serialize_events_json(&events).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let event = &json.as_array().unwrap()[0];
+
+        assert_eq!(event["timestamp"], json!("2026-04-03T10:00:00Z"));
+        assert_eq!(event["repo_path"], json!("/tmp/dev-journal"));
+        assert_eq!(event["repo_name"], json!("dev-journal"));
+        assert_eq!(event["event_type"], json!("commit"));
+        assert_eq!(event["payload"], payload);
+        assert!(event.get("id").is_none());
+        assert!(event.get("data").is_none());
+    }
+
+    #[test]
+    fn test_serialize_events_json_preserves_null_repo_name() {
+        let events = vec![db::Event {
+            id: None,
+            repo_path: "/tmp/no-name".to_string(),
+            repo_name: None,
+            event_type: "commit".to_string(),
+            timestamp: "2026-04-04T09:30:00Z".to_string(),
+            data: json!({ "hash": "def456" }),
+        }];
+
+        let rendered = serialize_events_json(&events).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let event = &json.as_array().unwrap()[0];
+
+        assert_eq!(event["repo_name"], serde_json::Value::Null);
     }
 }

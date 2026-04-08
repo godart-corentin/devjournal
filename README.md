@@ -141,7 +141,7 @@ devjournal add /path/to/my-api            # display name: "my-api"
 devjournal add /path/to/my-api --name API # display name: "API"
 ```
 
-All summary commands (`today`, `summary`, `week`, `month`), `search`, and `log` accept `--format json` to output raw events as a JSON array instead of a markdown summary or line-based log view. For summary commands and `search`, this skips the LLM call entirely.
+All summary commands (`today`, `summary`, `week`, `month`), `search`, and `log` accept `--format json` to output a JSON array of event objects instead of a markdown summary or line-based log view. Each event object includes `timestamp`, repo identity (`repo_path` and optional `repo_name`), `event_type`, and `payload`. For summary commands and `search`, this skips the LLM call entirely.
 
 ### Shell completions
 
