@@ -176,11 +176,11 @@ class Devjournal < Formula
 
   def caveats
     <<~EOS
-      For semantic enrichment, install `sem` as well:
+      For semantic enrichment, install \`sem\` as well:
         brew install sem-cli
 
-      If `sem` is unavailable, devjournal still works and falls back to regular git metadata.
-      Re-run `devjournal sync` after installing `sem` to backfill richer summaries.
+      If \`sem\` is unavailable, devjournal still works and falls back to regular git metadata.
+      Re-run \`devjournal sync\` after installing \`sem\` to backfill richer summaries.
     EOS
   end
 

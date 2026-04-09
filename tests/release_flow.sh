@@ -143,6 +143,9 @@ test_finalize_writes_formula_from_published_archive() {
     assert_contains 'v1.0.0.tar.gz' "$fixture_dir/Formula/devjournal.rb"
     assert_contains "$checksum" "$fixture_dir/Formula/devjournal.rb"
     assert_matches 'sha256 "[0-9a-f]{64}"' "$fixture_dir/Formula/devjournal.rb"
+    assert_contains 'For semantic enrichment, install `sem` as well:' "$fixture_dir/Formula/devjournal.rb"
+    assert_contains 'If `sem` is unavailable, devjournal still works and falls back to regular git metadata.' "$fixture_dir/Formula/devjournal.rb"
+    assert_contains 'Re-run `devjournal sync` after installing `sem` to backfill richer summaries.' "$fixture_dir/Formula/devjournal.rb"
 }
 
 main() {
