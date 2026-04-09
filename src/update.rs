@@ -313,12 +313,20 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
+    fn non_current_target() -> &'static str {
+        match CURRENT_TARGET {
+            "x86_64-unknown-linux-gnu" => "aarch64-apple-darwin",
+            _ => "x86_64-unknown-linux-gnu",
+        }
+    }
+
     #[test]
     fn finds_asset_for_current_target() {
+        let other_target = non_current_target();
         let release = serde_json::json!({
             "assets": [
                 {
-                    "name": "devjournal-x86_64-unknown-linux-gnu.tar.gz",
+                    "name": format!("devjournal-{other_target}.tar.gz"),
                     "browser_download_url": "https://example.invalid/linux"
                 },
                 {
