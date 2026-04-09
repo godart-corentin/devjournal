@@ -64,10 +64,13 @@ jobs:
       - name: Package and smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        timeout-minutes: 15
         run: |
           $hostTarget = ((rustc -vV) | Select-String '^host: ').ToString().Split()[1]
           $archive = "devjournal-$hostTarget.zip"
-          Compress-Archive -Path "target/release/devjournal.exe" -DestinationPath $archive
+          Write-Host "[smoke] Packaging $archive"
+          Compress-Archive -Path "target/release/devjournal.exe" -DestinationPath $archive -Force
+          Write-Host "[smoke] Running Windows smoke script"
           ./tests/smoke_release_windows.ps1 -ArchivePath $archive
 
   build:
