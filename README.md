@@ -277,6 +277,9 @@ If the process died without cleaning up its PID file, `devjournal start` will de
 **Config file not found?**
 Run `devjournal init` for guided setup, or `devjournal add <path>` to create the config with defaults.
 
+**Database schema error on startup?**
+devjournal applies lightweight automatic database migrations when it opens the SQLite database. If you see an error about an unsupported newer schema version, the database was created by a newer devjournal build than the one you are running. Upgrade devjournal to a newer release, or restore a compatible database backup.
+
 **"no author configured" error on start?**
 Add your git author name to `[general]` in the config file: `author = "Your Name"`. It must match your git author name exactly (check with `git log --format='%an' | head -1`).
 

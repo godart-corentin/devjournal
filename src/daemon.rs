@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use rusqlite::Connection;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -80,6 +81,13 @@ fn format_elapsed(secs: i64) -> String {
 }
 
 pub fn status() -> Result<()> {
+    status_with_db_opener(db::open)
+}
+
+fn status_with_db_opener<F>(mut open_db: F) -> Result<()>
+where
+    F: FnMut() -> Result<Connection>,
+{
     let pid_state = read_pid()?;
     let is_running = matches!(&pid_state, Some(pid) if is_process_alive(*pid));
 
@@ -102,59 +110,47 @@ pub fn status() -> Result<()> {
         sem_probe.detail
     );
 
-    if let Ok(conn) = db::open() {
-        let config = config::load_or_default();
-        if let Some(last_polled) = db::get_latest_poll_time(&conn)? {
-            if let Ok(polled_at) = last_polled.parse::<DateTime<Utc>>() {
-                let elapsed_secs = (Utc::now() - polled_at).num_seconds().max(0);
-                if is_running {
-                    println!("  Last polled: {}", format_elapsed(elapsed_secs));
-                    let interval = config.general.poll_interval_secs as i64;
-                    let next_in = interval - elapsed_secs;
-                    if next_in <= 0 {
-                        println!("  Next poll in: imminent");
-                    } else {
-                        println!("  Next poll in: ~{}s", next_in);
-                    }
+    let conn = open_db()?;
+    let config = config::load_or_default();
+    if let Some(last_polled) = db::get_latest_poll_time(&conn)? {
+        if let Ok(polled_at) = last_polled.parse::<DateTime<Utc>>() {
+            let elapsed_secs = (Utc::now() - polled_at).num_seconds().max(0);
+            if is_running {
+                println!("  Last polled: {}", format_elapsed(elapsed_secs));
+                let interval = config.general.poll_interval_secs as i64;
+                let next_in = interval - elapsed_secs;
+                if next_in <= 0 {
+                    println!("  Next poll in: imminent");
                 } else {
-                    println!(
-                        "  Last polled: {} (daemon stopped)",
-                        format_elapsed(elapsed_secs)
-                    );
+                    println!("  Next poll in: ~{}s", next_in);
                 }
+            } else {
+                println!(
+                    "  Last polled: {} (daemon stopped)",
+                    format_elapsed(elapsed_secs)
+                );
             }
         }
+    }
 
-        if config.repos.is_empty() {
-            println!("\nNo repos configured. Use `devjournal add <path>` to add one.");
-        } else {
-            let today = crate::summary::today();
-            let mut total_events: i64 = 0;
-            let mut repo_counts: Vec<(&crate::config::RepoConfig, i64)> = Vec::new();
-            for repo in &config.repos {
-                let count =
-                    db::event_count_for_date_by_repo(&conn, &repo.path, &today).unwrap_or(0);
-                total_events += count;
-                repo_counts.push((repo, count));
-            }
-            println!(
-                "\nWatched repos ({} repos, {} events today):",
-                config.repos.len(),
-                total_events
-            );
-            for (repo, count) in repo_counts {
-                println!("  {} ({} events today)", repo.display_name(), count);
-            }
-        }
+    if config.repos.is_empty() {
+        println!("\nNo repos configured. Use `devjournal add <path>` to add one.");
     } else {
-        let config = config::load_or_default();
-        if config.repos.is_empty() {
-            println!("\nNo repos configured. Use `devjournal add <path>` to add one.");
-        } else {
-            println!("\nWatched repos:");
-            for repo in &config.repos {
-                println!("  {}", repo.display_name());
-            }
+        let today = crate::summary::today();
+        let mut total_events: i64 = 0;
+        let mut repo_counts: Vec<(&crate::config::RepoConfig, i64)> = Vec::new();
+        for repo in &config.repos {
+            let count = db::event_count_for_date_by_repo(&conn, &repo.path, &today).unwrap_or(0);
+            total_events += count;
+            repo_counts.push((repo, count));
+        }
+        println!(
+            "\nWatched repos ({} repos, {} events today):",
+            config.repos.len(),
+            total_events
+        );
+        for (repo, count) in repo_counts {
+            println!("  {} ({} events today)", repo.display_name(), count);
         }
     }
 
@@ -207,8 +203,19 @@ where
 }
 
 fn run_poll_loop(poll_interval: Duration, author: &str) -> Result<()> {
+    run_poll_loop_with_db_opener(poll_interval, author, db::open)
+}
+
+fn run_poll_loop_with_db_opener<F>(
+    poll_interval: Duration,
+    author: &str,
+    mut open_db: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<Connection>,
+{
     while !SHOULD_STOP.load(Ordering::SeqCst) {
-        match db::open() {
+        match open_db() {
             Ok(conn) => {
                 let cfg = config::load_or_default();
                 let poll_author = cfg.general.author.as_deref().unwrap_or(author);
@@ -243,7 +250,7 @@ fn run_poll_loop(poll_interval: Duration, author: &str) -> Result<()> {
                     }
                 }
             }
-            Err(e) => eprintln!("[devjournal daemon] DB error: {}", e),
+            Err(e) => return Err(e.context("DB error")),
         }
 
         let steps = poll_interval.as_secs().max(1);
@@ -704,5 +711,25 @@ mod tests {
             err.to_string(),
             "no author configured. Set `author` in [general] config."
         );
+    }
+
+    #[test]
+    fn status_returns_db_errors_instead_of_masking_them() {
+        let err = status_with_db_opener(|| anyhow::bail!("migration failed")).unwrap_err();
+
+        assert_eq!(err.to_string(), "migration failed");
+    }
+
+    #[test]
+    fn run_poll_loop_returns_db_errors_instead_of_retrying() {
+        SHOULD_STOP.store(false, Ordering::SeqCst);
+
+        let err = run_poll_loop_with_db_opener(Duration::from_secs(1), "author", || {
+            anyhow::bail!("migration failed")
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("DB error"));
+        assert!(format!("{err:#}").contains("migration failed"));
     }
 }
