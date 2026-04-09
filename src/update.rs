@@ -146,9 +146,16 @@ fn find_asset_for_target<'a>(
     assets: &'a [serde_json::Value],
     target: &str,
 ) -> Result<&'a serde_json::Value> {
+    let tarball_name = format!("devjournal-{target}.tar.gz");
+    let zip_name = format!("devjournal-{target}.zip");
+
     assets
         .iter()
-        .find(|a| a["name"].as_str().is_some_and(|n| n.contains(target)))
+        .find(|a| {
+            a["name"]
+                .as_str()
+                .is_some_and(|n| n == tarball_name || n == zip_name)
+        })
         .context(format!("No pre-built binary for {target} in this release"))
 }
 
@@ -323,6 +330,31 @@ mod tests {
 
         let asset =
             find_asset_for_target(release["assets"].as_array().unwrap(), CURRENT_TARGET).unwrap();
+
+        assert_eq!(
+            asset["browser_download_url"].as_str(),
+            Some("https://example.invalid/current")
+        );
+    }
+
+    #[test]
+    fn finds_asset_by_exact_target_name_not_substring() {
+        let release = serde_json::json!({
+            "assets": [
+                {
+                    "name": "devjournal-x86_64-unknown-linux-gnu.tar.gz",
+                    "browser_download_url": "https://example.invalid/linux"
+                },
+                {
+                    "name": "devjournal-unknown-linux-gnu.tar.gz",
+                    "browser_download_url": "https://example.invalid/current"
+                }
+            ]
+        });
+
+        let asset =
+            find_asset_for_target(release["assets"].as_array().unwrap(), "unknown-linux-gnu")
+                .unwrap();
 
         assert_eq!(
             asset["browser_download_url"].as_str(),
