@@ -47,8 +47,7 @@ brew install sem-cli
 Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata.
 
 The tap repository lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
-
-Long term, plain `brew install devjournal` without adding the custom tap first will require a successful `homebrew-core` submission. For that, the project needs to keep tagged releases, GitHub source archives, and `Cargo.toml` versioning aligned.
+The in-repo [`Formula/devjournal.rb`](Formula/devjournal.rb) is the canonical release formula. Refresh it with `scripts/release.sh finalize <semver>` after the matching `v<package.version>` tag is published, then sync the result to the dedicated tap.
 
 **Update:**
 
@@ -68,16 +67,19 @@ cargo build --release
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
 
-## Homebrew roadmap
+## Homebrew release flow
 
-The repository includes [`Formula/devjournal.rb`](Formula/devjournal.rb), and the dedicated tap lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal). That tap is the recommended Homebrew installation path until a future `homebrew-core` submission.
+`Cargo.toml` is the canonical release version source. Tag GitHub releases as `v<package.version>`.
 
-Before submitting to `homebrew-core`, make sure:
+For each release:
 
-- the git tag, GitHub release, and `Cargo.toml` version all match
-- the source tarball URL and SHA256 are updated for the new release
-- `brew audit --strict --new devjournal` passes cleanly
-- `brew test devjournal` passes on a fresh install
+1. Run `scripts/release.sh prep <semver>` to update repo metadata for the next version.
+2. Commit the prep changes, create tag `v<semver>`, and push the branch plus tag.
+3. Wait for GitHub Actions to publish the release archives and `devjournal-checksums.txt`.
+4. Run `scripts/release.sh finalize <semver>` to refresh [`Formula/devjournal.rb`](Formula/devjournal.rb) from the published tag archive checksum.
+5. Commit the formula refresh and sync the same formula to [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
+
+Run `scripts/release.sh verify` before opening a release PR or after syncing release metadata to confirm the crate version, formula tag, formula checksum, README wording, and maintainer guide still agree.
 
 ## Setup
 
