@@ -154,20 +154,7 @@ mod tests {
 
         fn init_conn() -> Connection {
             let conn = Connection::open_in_memory().unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo_path TEXT NOT NULL,
-                    repo_name TEXT,
-                    event_type TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    commit_hash TEXT,
-                    data TEXT NOT NULL,
-                    UNIQUE(repo_path, commit_hash)
-                );",
-            )
-            .unwrap();
+            db::init_test_database(&conn).unwrap();
             conn
         }
 

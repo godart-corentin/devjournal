@@ -7,6 +7,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+const CURRENT_SCHEMA_VERSION: i64 = 1;
+
 pub fn data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -28,6 +30,51 @@ pub fn open() -> Result<Connection> {
 
 fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    let mut version = schema_version(conn)?;
+    if version > CURRENT_SCHEMA_VERSION {
+        anyhow::bail!(
+            "Database uses newer schema version {} but this build only supports {}",
+            version,
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    while version < CURRENT_SCHEMA_VERSION {
+        apply_migration(conn, version)?;
+        version = schema_version(conn)?;
+    }
+
+    Ok(())
+}
+
+fn schema_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+}
+
+fn apply_migration(conn: &Connection, from_version: i64) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+
+    let result = match from_version {
+        0 => migrate_to_v1(conn),
+        _ => anyhow::bail!(
+            "No migration available from schema version {}",
+            from_version
+        ),
+    };
+
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(err)
+        }
+    }
+}
+
+fn migrate_to_v1(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS events (
@@ -48,9 +95,16 @@ fn init(conn: &Connection) -> Result<()> {
             last_commit_hash TEXT,
             last_polled_at TEXT
         );
-    ",
+
+        PRAGMA user_version = 1;
+        ",
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn init_test_database(conn: &Connection) -> Result<()> {
+    init(conn)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -402,6 +456,83 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn test_init_sets_schema_version_for_fresh_database() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        init(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn test_init_migrates_legacy_schema_without_losing_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            PRAGMA user_version = 0;
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                repo_name TEXT,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                commit_hash TEXT,
+                data TEXT NOT NULL,
+                UNIQUE(repo_path, commit_hash)
+            );
+            CREATE TABLE poll_state (
+                repo_path TEXT PRIMARY KEY,
+                last_commit_hash TEXT,
+                last_branch TEXT,
+                last_polled_at TEXT
+            );
+            INSERT INTO events (repo_path, repo_name, event_type, timestamp, commit_hash, data)
+            VALUES ('/repo/legacy', 'legacy', 'commit', '2026-04-09T10:00:00Z', 'abc123', '{\"hash\":\"abc123\",\"message\":\"legacy row\"}');
+            ",
+        )
+        .unwrap();
+
+        init(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+
+        let events = get_events_for_date(&conn, "2026-04-09").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].repo_path, "/repo/legacy");
+        assert_eq!(events[0].data["message"], "legacy row");
+    }
+
+    #[test]
+    fn test_init_is_idempotent_for_current_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        init(&conn).unwrap();
+        init(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn test_init_rejects_unknown_newer_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA user_version = 99;").unwrap();
+
+        let error = init(&conn).unwrap_err().to_string();
+
+        assert!(error.contains("newer schema version"));
+        assert!(error.contains("99"));
     }
 
     #[test]
