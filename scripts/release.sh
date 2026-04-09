@@ -17,6 +17,7 @@ usage() {
 Usage:
   scripts/release.sh prep <semver> [--repo <path>]
   scripts/release.sh finalize <semver> [--repo <path>]
+  scripts/release.sh metadata-synced [--repo <path>]
   scripts/release.sh verify [--repo <path>]
 EOF
 }
@@ -277,6 +278,13 @@ run_verify() {
     echo "Release metadata is synchronized for version $(cargo_version "$repo_dir")."
 }
 
+run_metadata_synced() {
+    repo_dir=$1
+    require_file "$repo_dir/$CARGO_PATH"
+    require_file "$repo_dir/$FORMULA_PATH"
+    verify_formula_state "$repo_dir"
+}
+
 run_prep() {
     repo_dir=$1
     version=$2
@@ -353,7 +361,7 @@ main() {
             shift
             validate_semver "$version"
             ;;
-        verify)
+        metadata-synced|verify)
             ;;
         *)
             usage
@@ -386,6 +394,9 @@ main() {
             ;;
         finalize)
             run_finalize "$repo_dir" "$version"
+            ;;
+        metadata-synced)
+            run_metadata_synced "$repo_dir"
             ;;
         verify)
             run_verify "$repo_dir"

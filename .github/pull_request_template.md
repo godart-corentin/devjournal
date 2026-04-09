@@ -21,7 +21,7 @@ Closes #
 - [ ] `cargo clippy --all-targets -- -D warnings`
 - [ ] `cargo test --verbose`
 - [ ] `sh tests/release_flow.sh`
-- [ ] `sh scripts/release.sh verify`
+- [ ] `sh scripts/release.sh metadata-synced && sh scripts/release.sh verify` when release metadata is synchronized
 - [ ] Manual testing completed
 
 ## Checklist

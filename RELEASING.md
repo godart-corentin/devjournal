@@ -27,5 +27,5 @@ GitHub Actions release workflow sits between `prep` and `finalize`.
 - Run `cargo clippy --all-targets -- -D warnings`
 - Run `cargo test --verbose`
 - Run `sh tests/release_flow.sh`
-- Run `sh scripts/release.sh verify`
+- Run `sh scripts/release.sh metadata-synced && sh scripts/release.sh verify` once `Formula/devjournal.rb` has been refreshed by `finalize`
 - Run `brew audit --strict Formula/devjournal.rb` and `brew test devjournal` when Homebrew is available

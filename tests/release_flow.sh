@@ -101,6 +101,20 @@ test_verify_rejects_roadmap_language() {
     assert_contains 'README still contains outdated release-roadmap wording' /tmp/release-roadmap.out
 }
 
+test_metadata_synced_reports_release_state() {
+    fixture_dir=$(make_fixture)
+
+    "$SCRIPT" metadata-synced --repo "$fixture_dir"
+
+    "$SCRIPT" prep 1.0.0 --repo "$fixture_dir"
+
+    if "$SCRIPT" metadata-synced --repo "$fixture_dir" >/tmp/release-metadata-synced.out 2>&1; then
+        fail "metadata-synced should fail after prep until finalize updates the formula"
+    fi
+
+    assert_contains 'Formula version does not match Cargo.toml version' /tmp/release-metadata-synced.out
+}
+
 test_finalize_rejects_missing_remote_tag() {
     fixture_dir=$(make_fixture)
     "$SCRIPT" prep 1.0.0 --repo "$fixture_dir"
@@ -135,6 +149,7 @@ main() {
     test_prep_updates_repo_metadata
     test_verify_rejects_version_drift
     test_verify_rejects_roadmap_language
+    test_metadata_synced_reports_release_state
     test_finalize_rejects_missing_remote_tag
     test_finalize_writes_formula_from_published_archive
 }
