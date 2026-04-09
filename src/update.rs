@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,8 @@ const REPO: &str = "godart-corentin/dev-journal";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CURRENT_TARGET: &str = env!("TARGET");
 const CHECKSUMS_ASSET: &str = "devjournal-checksums.txt";
+const RELEASE_URL_ENV: &str = "DEVJOURNAL_UPDATE_RELEASE_URL";
+const ASSET_BASE_URL_ENV: &str = "DEVJOURNAL_UPDATE_ASSET_BASE_URL";
 
 pub fn run_update() -> Result<()> {
     #[cfg(windows)]
@@ -24,10 +27,12 @@ pub fn run_update() -> Result<()> {
 
 #[cfg(unix)]
 fn run_update_unix() -> Result<()> {
+    let sources = UpdateSources::from_env();
+
     println!("Current version: v{CURRENT_VERSION} ({CURRENT_TARGET})");
     println!("Checking for updates...");
 
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release(&sources.release_url)?;
 
     let tag = release["tag_name"]
         .as_str()
@@ -45,16 +50,10 @@ fn run_update_unix() -> Result<()> {
         .as_array()
         .context("No assets in release")?;
     let asset = find_asset_for_target(assets, CURRENT_TARGET)?;
-    let asset_name = asset["name"]
-        .as_str()
-        .context("No asset name for release binary")?;
-    let download_url = asset["browser_download_url"]
-        .as_str()
-        .context("No download URL for asset")?;
+    let asset_name = asset_name(asset)?;
+    let download_url = sources.asset_download_url(asset)?;
     let checksums_asset = find_checksums_asset(assets)?;
-    let checksums_url = checksums_asset["browser_download_url"]
-        .as_str()
-        .context("No download URL for checksum manifest")?;
+    let checksums_url = sources.asset_download_url(checksums_asset)?;
 
     println!("Downloading...");
 
@@ -63,8 +62,9 @@ fn run_update_unix() -> Result<()> {
     std::fs::create_dir_all(&tmpdir)?;
 
     let archive_path = tmpdir.join(asset_name);
-    download_to_file(download_url, &archive_path).context("Failed to download update")?;
-    let checksums = download_text(checksums_url).context("Failed to download checksum manifest")?;
+    download_to_file(&download_url, &archive_path).context("Failed to download update")?;
+    let checksums =
+        download_text(&checksums_url).context("Failed to download checksum manifest")?;
     let expected_checksum = expected_checksum_for_asset(asset_name, &checksums)?;
     verify_archive_checksum(&archive_path, &expected_checksum)?;
 
@@ -91,15 +91,55 @@ fn run_update_unix() -> Result<()> {
     Ok(())
 }
 
-fn fetch_latest_release() -> Result<serde_json::Value> {
-    ureq::get(&format!(
-        "https://api.github.com/repos/{REPO}/releases/latest"
-    ))
-    .set("User-Agent", "devjournal")
-    .call()
-    .context("Failed to check for updates")?
-    .into_json()
-    .context("Failed to parse release info")
+fn fetch_latest_release(url: &str) -> Result<serde_json::Value> {
+    ureq::get(url)
+        .set("User-Agent", "devjournal")
+        .call()
+        .context("Failed to check for updates")?
+        .into_json()
+        .context("Failed to parse release info")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UpdateSources {
+    release_url: String,
+    asset_base_url: Option<String>,
+}
+
+impl UpdateSources {
+    fn from_env() -> Self {
+        Self {
+            release_url: env::var(RELEASE_URL_ENV).unwrap_or_else(|_| default_release_url()),
+            asset_base_url: env::var(ASSET_BASE_URL_ENV).ok(),
+        }
+    }
+
+    fn asset_download_url(&self, asset: &serde_json::Value) -> Result<String> {
+        let name = asset_name(asset)?;
+
+        if let Some(base_url) = &self.asset_base_url {
+            return Ok(join_url(base_url, name));
+        }
+
+        asset["browser_download_url"]
+            .as_str()
+            .map(str::to_string)
+            .context("No download URL for asset")
+    }
+}
+
+fn default_release_url() -> String {
+    format!("https://api.github.com/repos/{REPO}/releases/latest")
+}
+
+fn asset_name(asset: &serde_json::Value) -> Result<&str> {
+    asset["name"]
+        .as_str()
+        .context("No asset name for release binary")
+}
+
+fn join_url(base: &str, path: &str) -> String {
+    format!("{}/{}", base.trim_end_matches('/'), path)
 }
 
 fn find_asset_for_target<'a>(
@@ -288,6 +328,54 @@ mod tests {
             asset["browser_download_url"].as_str(),
             Some("https://example.invalid/current")
         );
+    }
+
+    #[test]
+    fn update_sources_default_to_github_release_endpoint() {
+        let sources = UpdateSources {
+            release_url: default_release_url(),
+            asset_base_url: None,
+        };
+
+        assert_eq!(
+            sources.release_url,
+            "https://api.github.com/repos/godart-corentin/dev-journal/releases/latest"
+        );
+    }
+
+    #[test]
+    fn asset_download_url_uses_override_base_when_present() {
+        let sources = UpdateSources {
+            release_url: default_release_url(),
+            asset_base_url: Some("http://127.0.0.1:8765/releases".to_string()),
+        };
+        let asset = serde_json::json!({
+            "name": "devjournal-x86_64-unknown-linux-gnu.tar.gz",
+            "browser_download_url": "https://example.invalid/download"
+        });
+
+        let download_url = sources.asset_download_url(&asset).unwrap();
+
+        assert_eq!(
+            download_url,
+            "http://127.0.0.1:8765/releases/devjournal-x86_64-unknown-linux-gnu.tar.gz"
+        );
+    }
+
+    #[test]
+    fn asset_download_url_falls_back_to_asset_metadata() {
+        let sources = UpdateSources {
+            release_url: default_release_url(),
+            asset_base_url: None,
+        };
+        let asset = serde_json::json!({
+            "name": "devjournal-x86_64-unknown-linux-gnu.tar.gz",
+            "browser_download_url": "https://example.invalid/download"
+        });
+
+        let download_url = sources.asset_download_url(&asset).unwrap();
+
+        assert_eq!(download_url, "https://example.invalid/download");
     }
 
     #[test]

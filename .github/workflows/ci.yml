@@ -35,11 +35,45 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --verbose
+      - name: Verify release shell flow
+        run: sh tests/release_flow.sh
+      - name: Verify release metadata
+        run: sh scripts/release.sh verify
+
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native release binary
+        run: cargo build --release --verbose
+      - name: Package and smoke test (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          host_target=$(rustc -vV | sed -n 's/^host: //p')
+          archive="devjournal-${host_target}.tar.gz"
+          tar czf "$archive" -C target/release devjournal
+          sh tests/smoke_release_unix.sh "$archive"
+      - name: Package and smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hostTarget = ((rustc -vV) | Select-String '^host: ').ToString().Split()[1]
+          $archive = "devjournal-$hostTarget.zip"
+          Compress-Archive -Path "target/release/devjournal.exe" -DestinationPath $archive
+          ./tests/smoke_release_windows.ps1 -ArchivePath $archive
 
   build:
     name: Build release
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, smoke]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
