@@ -71,7 +71,7 @@ fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
         db::insert_event(conn, &event)?;
     }
 
-    db::update_poll_state(conn, &repo_config.path, &head_hash, &branch_name, &now)?;
+    db::update_poll_state(conn, &repo_config.path, &head_hash, &now)?;
     Ok(count)
 }
 
@@ -111,7 +111,7 @@ fn poll_repo_with_extractor<E: SemExtractor + ?Sized>(
         if state.last_commit_hash.as_deref() == Some(&head_hash) {
             // nothing new — still update the poll timestamp so status stays accurate
             let now = Local::now().to_rfc3339();
-            db::update_poll_state(conn, &repo_config.path, &head_hash, &branch_name, &now)?;
+            db::update_poll_state(conn, &repo_config.path, &head_hash, &now)?;
             return Ok(0);
         }
         collect_new_commits(&repo, &head_hash, state.last_commit_hash.as_deref())?
@@ -137,7 +137,7 @@ fn poll_repo_with_extractor<E: SemExtractor + ?Sized>(
         db::insert_event(conn, &event)?;
     }
 
-    db::update_poll_state(conn, &repo_config.path, &head_hash, &branch_name, &now)?;
+    db::update_poll_state(conn, &repo_config.path, &head_hash, &now)?;
     Ok(count)
 }
 
@@ -581,7 +581,7 @@ mod tests {
             );
             CREATE TABLE IF NOT EXISTS poll_state (
                 repo_path TEXT PRIMARY KEY,
-                last_commit_hash TEXT, last_branch TEXT, last_polled_at TEXT
+                last_commit_hash TEXT, last_polled_at TEXT
             );
         ",
         )
@@ -964,18 +964,16 @@ mod tests {
         };
 
         poll_repo(&repo_config, &conn, None).unwrap(); // first poll - sets last_polled_at
-        let state_after_first = db::get_poll_state(&conn, &repo_config.path)
+        let first_polled_at = db::get_repo_last_poll_time(&conn, &repo_config.path)
             .unwrap()
             .unwrap();
-        let first_polled_at = state_after_first.last_polled_at.unwrap();
 
         std::thread::sleep(std::time::Duration::from_secs(1));
 
         poll_repo(&repo_config, &conn, None).unwrap(); // second poll - no new commits
-        let state_after_second = db::get_poll_state(&conn, &repo_config.path)
+        let second_polled_at = db::get_repo_last_poll_time(&conn, &repo_config.path)
             .unwrap()
             .unwrap();
-        let second_polled_at = state_after_second.last_polled_at.unwrap();
 
         assert!(
             second_polled_at > first_polled_at,

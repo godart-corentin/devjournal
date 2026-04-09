@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+use rusqlite::OptionalExtension;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,7 +46,6 @@ fn init(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS poll_state (
             repo_path TEXT PRIMARY KEY,
             last_commit_hash TEXT,
-            last_branch TEXT,
             last_polled_at TEXT
         );
     ",
@@ -154,23 +155,16 @@ pub fn get_events_for_date(conn: &Connection, date: &str) -> Result<Vec<Event>> 
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct PollState {
     pub last_commit_hash: Option<String>,
-    pub last_branch: Option<String>,
-    pub last_polled_at: Option<String>,
 }
 
 pub fn get_poll_state(conn: &Connection, repo_path: &str) -> Result<Option<PollState>> {
-    let mut stmt = conn.prepare(
-        "SELECT last_commit_hash, last_branch, last_polled_at FROM poll_state WHERE repo_path = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT last_commit_hash FROM poll_state WHERE repo_path = ?1")?;
     let mut rows = stmt.query(params![repo_path])?;
     if let Some(row) = rows.next()? {
         Ok(Some(PollState {
             last_commit_hash: row.get(0)?,
-            last_branch: row.get(1)?,
-            last_polled_at: row.get(2)?,
         }))
     } else {
         Ok(None)
@@ -181,17 +175,15 @@ pub fn update_poll_state(
     conn: &Connection,
     repo_path: &str,
     commit_hash: &str,
-    branch: &str,
     polled_at: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO poll_state (repo_path, last_commit_hash, last_branch, last_polled_at)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO poll_state (repo_path, last_commit_hash, last_polled_at)
+         VALUES (?1, ?2, ?3)
          ON CONFLICT(repo_path) DO UPDATE SET
              last_commit_hash = excluded.last_commit_hash,
-             last_branch = excluded.last_branch,
              last_polled_at = excluded.last_polled_at",
-        params![repo_path, commit_hash, branch, polled_at],
+        params![repo_path, commit_hash, polled_at],
     )?;
     Ok(())
 }
@@ -273,6 +265,17 @@ pub fn get_latest_poll_time(conn: &Connection) -> Result<Option<String>> {
     } else {
         Ok(None)
     }
+}
+
+#[cfg(test)]
+pub fn get_repo_last_poll_time(conn: &Connection, repo_path: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT last_polled_at FROM poll_state WHERE repo_path = ?1",
+        params![repo_path],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 pub fn search_events(
@@ -538,22 +541,14 @@ mod tests {
     #[test]
     fn test_poll_state_upsert() {
         let conn = test_conn();
-        update_poll_state(&conn, "/tmp/repo", "hash1", "main", "2026-03-23T09:00:00Z").unwrap();
+        update_poll_state(&conn, "/tmp/repo", "hash1", "2026-03-23T09:00:00Z").unwrap();
         let state = get_poll_state(&conn, "/tmp/repo").unwrap().unwrap();
         assert_eq!(state.last_commit_hash.as_deref(), Some("hash1"));
 
         // upsert
-        update_poll_state(
-            &conn,
-            "/tmp/repo",
-            "hash2",
-            "feature/x",
-            "2026-03-23T10:00:00Z",
-        )
-        .unwrap();
+        update_poll_state(&conn, "/tmp/repo", "hash2", "2026-03-23T10:00:00Z").unwrap();
         let state = get_poll_state(&conn, "/tmp/repo").unwrap().unwrap();
         assert_eq!(state.last_commit_hash.as_deref(), Some("hash2"));
-        assert_eq!(state.last_branch.as_deref(), Some("feature/x"));
     }
 
     #[test]
@@ -645,9 +640,9 @@ mod tests {
     #[test]
     fn test_get_latest_poll_time_returns_max_across_repos() {
         let conn = test_conn();
-        update_poll_state(&conn, "/repo/a", "h1", "main", "2026-03-25T09:00:00Z").unwrap();
-        update_poll_state(&conn, "/repo/b", "h2", "main", "2026-03-25T10:30:00Z").unwrap();
-        update_poll_state(&conn, "/repo/c", "h3", "main", "2026-03-25T08:00:00Z").unwrap();
+        update_poll_state(&conn, "/repo/a", "h1", "2026-03-25T09:00:00Z").unwrap();
+        update_poll_state(&conn, "/repo/b", "h2", "2026-03-25T10:30:00Z").unwrap();
+        update_poll_state(&conn, "/repo/c", "h3", "2026-03-25T08:00:00Z").unwrap();
         let result = get_latest_poll_time(&conn).unwrap();
         assert_eq!(result.as_deref(), Some("2026-03-25T10:30:00Z"));
     }
