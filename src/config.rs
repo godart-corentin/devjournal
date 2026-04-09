@@ -304,6 +304,12 @@ pub fn api_key(config: &LlmConfig) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_var_test_mutex() -> &'static Mutex<()> {
+        static ENV_VAR_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_VAR_TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_parse_valid_config() {
@@ -381,6 +387,9 @@ name = "my-repo"
 
     #[test]
     fn test_api_key_env_override() {
+        let _guard = env_var_test_mutex().lock().unwrap();
+        let previous = std::env::var("DEVJOURNAL_API_KEY").ok();
+
         std::env::set_var("DEVJOURNAL_API_KEY", "env-key");
         let llm = LlmConfig {
             provider: "claude".to_string(),
@@ -390,6 +399,10 @@ name = "my-repo"
             system_prompt: None,
         };
         assert_eq!(api_key(&llm).as_deref(), Some("env-key"));
-        std::env::remove_var("DEVJOURNAL_API_KEY");
+
+        match previous {
+            Some(value) => std::env::set_var("DEVJOURNAL_API_KEY", value),
+            None => std::env::remove_var("DEVJOURNAL_API_KEY"),
+        }
     }
 }
