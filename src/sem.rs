@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,26 +62,18 @@ impl CliSemExtractor {
 
 impl SemExtractor for CliSemExtractor {
     fn extract(&self, repo_path: &str, commit_hash: &str) -> Result<Option<SemMetadata>> {
-        let sem_bin = sem_binary();
-        let output = Command::new(&sem_bin)
-            .current_dir(repo_path)
-            .args(Self::build_args(commit_hash))
-            .output()
-            .with_context(|| {
-                format!(
-                    "sem not found — install sem-cli and ensure the `sem` binary is available (try: {})",
-                    install_hint()
-                )
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("sem diff failed: {}", stderr.trim());
-        }
-
-        let stdout =
-            String::from_utf8(output.stdout).context("sem diff output was not valid UTF-8")?;
-        parse_sem_output(&stdout)
+        extract_with_command_runner(
+            std::env::consts::OS,
+            &sem_binary(),
+            repo_path,
+            commit_hash,
+            |command, args, repo_path| {
+                Command::new(command)
+                    .current_dir(repo_path)
+                    .args(args)
+                    .output()
+            },
+        )
     }
 }
 
@@ -92,55 +84,13 @@ pub fn parse_sem_output(stdout: &str) -> Result<Option<SemMetadata>> {
 }
 
 pub fn probe() -> SemProbe {
-    let install_hint = install_hint();
-    let sem_bin = sem_binary();
-
-    match Command::new(&sem_bin).arg("--version").output() {
-        Ok(output) if output.status.success() => SemProbe {
-            status: SemIntegrationStatus::Active,
-            detail: format!("using {}", sem_bin.display()),
-            install_hint,
-        },
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                format!("{} exists but `sem --version` failed", sem_bin.display())
-            } else {
-                format!(
-                    "{} exists but failed health check: {}",
-                    sem_bin.display(),
-                    stderr
-                )
-            };
-            SemProbe {
-                status: SemIntegrationStatus::Degraded,
-                detail,
-                install_hint,
-            }
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => SemProbe {
-            status: SemIntegrationStatus::Unavailable,
-            detail: "sem is not installed".to_string(),
-            install_hint,
-        },
-        Err(err) => SemProbe {
-            status: SemIntegrationStatus::Degraded,
-            detail: format!("failed to execute sem: {}", err),
-            install_hint,
-        },
-    }
+    probe_with_command_runner(std::env::consts::OS, &sem_binary(), |command, args| {
+        Command::new(command).args(args).output()
+    })
 }
 
 pub fn from_value(value: &serde_json::Value) -> Option<SemMetadata> {
     serde_json::from_value(value.clone()).ok()
-}
-
-pub fn install_hint() -> String {
-    install_hint_for(
-        std::env::consts::OS,
-        command_exists("brew"),
-        command_exists("cargo"),
-    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,6 +256,10 @@ fn command_exists(command: &str) -> bool {
 }
 
 fn install_hint_for(os: &str, has_brew: bool, has_cargo: bool) -> String {
+    if os == "windows" {
+        return "semantic enrichment is currently unavailable on Windows".to_string();
+    }
+
     if os == "macos" && has_brew {
         "brew install sem-cli".to_string()
     } else if has_cargo {
@@ -317,9 +271,128 @@ fn install_hint_for(os: &str, has_brew: bool, has_cargo: bool) -> String {
     }
 }
 
+fn sem_supported_on_os(os: &str) -> bool {
+    os != "windows"
+}
+
+fn windows_unsupported_probe() -> SemProbe {
+    SemProbe {
+        status: SemIntegrationStatus::Unavailable,
+        detail: "sem is not supported on Windows".to_string(),
+        install_hint: install_hint_for("windows", false, false),
+    }
+}
+
+fn probe_with_command_runner<F>(os: &str, sem_bin: &Path, run_command: F) -> SemProbe
+where
+    F: FnOnce(&Path, &[&str]) -> std::io::Result<std::process::Output>,
+{
+    if !sem_supported_on_os(os) {
+        return windows_unsupported_probe();
+    }
+
+    let install_hint = install_hint_for(os, command_exists("brew"), command_exists("cargo"));
+
+    match run_command(sem_bin, &["--version"]) {
+        Ok(output) if output.status.success() => SemProbe {
+            status: SemIntegrationStatus::Active,
+            detail: format!("using {}", sem_bin.display()),
+            install_hint,
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                format!("{} exists but `sem --version` failed", sem_bin.display())
+            } else {
+                format!(
+                    "{} exists but failed health check: {}",
+                    sem_bin.display(),
+                    stderr
+                )
+            };
+            SemProbe {
+                status: SemIntegrationStatus::Degraded,
+                detail,
+                install_hint,
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => SemProbe {
+            status: SemIntegrationStatus::Unavailable,
+            detail: "sem is not installed".to_string(),
+            install_hint,
+        },
+        Err(err) => SemProbe {
+            status: SemIntegrationStatus::Degraded,
+            detail: format!("failed to execute sem: {}", err),
+            install_hint,
+        },
+    }
+}
+
+fn extract_with_command_runner<F>(
+    os: &str,
+    sem_bin: &Path,
+    repo_path: &str,
+    commit_hash: &str,
+    run_command: F,
+) -> Result<Option<SemMetadata>>
+where
+    F: FnOnce(&Path, &[String], &str) -> std::io::Result<std::process::Output>,
+{
+    if !sem_supported_on_os(os) {
+        return Ok(None);
+    }
+
+    let output = run_command(
+        sem_bin,
+        &CliSemExtractor::build_args(commit_hash),
+        repo_path,
+    )
+    .with_context(|| {
+        format!(
+            "sem not found — install sem-cli and ensure the `sem` binary is available (try: {})",
+            install_hint_for(os, command_exists("brew"), command_exists("cargo"))
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("sem diff failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("sem diff output was not valid UTF-8")?;
+    parse_sem_output(&stdout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_windows_sem_reports_unavailable() {
+        let probe =
+            probe_with_command_runner("windows", Path::new("sem.exe"), |_command, _args| {
+                panic!("windows probe should not execute sem")
+            });
+
+        assert_eq!(probe.status, SemIntegrationStatus::Unavailable);
+        assert!(probe.detail.contains("not supported on Windows"));
+    }
+
+    #[test]
+    fn test_windows_sem_extractor_skips_process_execution() {
+        let result = extract_with_command_runner(
+            "windows",
+            Path::new("sem.exe"),
+            "/tmp/repo",
+            "abc1234",
+            |_command, _args, _repo_path| panic!("windows extraction should not execute sem"),
+        )
+        .unwrap();
+
+        assert_eq!(result, None);
+    }
 
     #[test]
     fn test_parse_sem_output_normalizes_changes() {
