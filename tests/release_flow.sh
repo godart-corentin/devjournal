@@ -33,6 +33,18 @@ assert_matches() {
     fi
 }
 
+cargo_version() {
+    repo_dir=$1
+    sed -n 's/^version = "\(.*\)"$/\1/p' "$repo_dir/Cargo.toml" | head -n 1
+}
+
+sync_fixture_formula_version() {
+    repo_dir=$1
+    version=$(cargo_version "$repo_dir")
+    perl -0pi -e 's#/refs/tags/v[^"]+\.tar\.gz#/refs/tags/v'"$version"'.tar.gz#' \
+        "$repo_dir/Formula/devjournal.rb"
+}
+
 make_fixture() {
     fixture_dir=$(mktemp -d)
     cp "$ROOT_DIR/Cargo.toml" "$fixture_dir/Cargo.toml"
@@ -42,6 +54,7 @@ make_fixture() {
     fi
     mkdir -p "$fixture_dir/Formula"
     cp "$ROOT_DIR/Formula/devjournal.rb" "$fixture_dir/Formula/devjournal.rb"
+    sync_fixture_formula_version "$fixture_dir"
     printf '%s\n' "$fixture_dir"
 }
 
@@ -66,8 +79,8 @@ test_prep_updates_repo_metadata() {
 
 test_verify_rejects_version_drift() {
     fixture_dir=$(make_fixture)
-    sed -i.bak 's/v0.4.0/v9.9.9/' "$fixture_dir/Formula/devjournal.rb"
-    rm -f "$fixture_dir/Formula/devjournal.rb.bak"
+    perl -0pi -e 's#/refs/tags/v[^"]+\.tar\.gz#/refs/tags/v9.9.9.tar.gz#' \
+        "$fixture_dir/Formula/devjournal.rb"
 
     if "$SCRIPT" verify --repo "$fixture_dir" >/tmp/release-verify.out 2>&1; then
         fail "verify should reject Cargo/formula drift"
