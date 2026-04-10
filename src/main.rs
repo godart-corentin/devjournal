@@ -78,14 +78,17 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: Format,
     },
-    /// Add a git repository to watch
+    /// Add a git repository to watch (auto-suffixes duplicate names)
     Add {
         path: String,
         #[arg(long)]
         name: Option<String>,
     },
-    /// Remove a git repository from the watch list
-    Remove { path: String },
+    /// Remove a git repository from the watch list by name or path
+    Remove {
+        #[arg(value_name = "REPO")]
+        repo: String,
+    },
     /// Show daemon status and watched repos
     Status,
     /// Show raw events for a date or range (for debugging)
@@ -293,8 +296,8 @@ fn main() -> Result<()> {
             config::add_repo(&path, name)?;
         }
 
-        Some(Commands::Remove { path }) => {
-            config::remove_repo(&path)?;
+        Some(Commands::Remove { repo }) => {
+            config::remove_repo(&repo)?;
         }
 
         Some(Commands::Status) => {
@@ -313,17 +316,8 @@ fn main() -> Result<()> {
             let repos: Vec<_> = match &repo {
                 None => config.repos.iter().collect(),
                 Some(name) => {
-                    let found = config
-                        .repos
-                        .iter()
-                        .find(|r| r.display_name() == name || r.path == *name);
-                    match found {
-                        Some(r) => vec![r],
-                        None => anyhow::bail!(
-                            "Repo '{}' not found. Use `devjournal list` to see tracked repos.",
-                            name
-                        ),
-                    }
+                    let found = config::resolve_repo(&config.repos, name)?;
+                    vec![found]
                 }
             };
 

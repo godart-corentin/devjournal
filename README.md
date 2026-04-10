@@ -79,6 +79,8 @@ devjournal add /path/to/your/repo
 devjournal add /path/to/another/repo --name my-project
 ```
 
+If another tracked repo already uses the same display name, `devjournal` will auto-suffix the new one, for example `my-project-2`.
+
 ### 4. Start the watcher
 
 ```bash
