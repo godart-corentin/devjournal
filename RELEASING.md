@@ -1,6 +1,6 @@
 # Releasing devjournal
 
-`Cargo.toml` is the canonical release version source. The in-repo [`Formula/devjournal.rb`](Formula/devjournal.rb) is the canonical Homebrew formula that gets copied to the external tap after `finalize`.
+`Cargo.toml` is the canonical release version source. The in-repo [`Formula/devjournal.rb`](Formula/devjournal.rb) is the canonical Homebrew formula that gets copied to the external tap after `finalize`. The user-facing README intentionally links here for maintainer-only release flow details instead of embedding them inline.
 
 ## Two-phase release flow
 
@@ -17,9 +17,9 @@ GitHub Actions release workflow sits between `prep` and `finalize`.
 
 ## Command reference
 
-- `scripts/release.sh prep <semver>` updates `Cargo.toml` and rewrites the README release wording for the next version.
+- `scripts/release.sh prep <semver>` updates `Cargo.toml` for the next version.
 - `scripts/release.sh finalize <semver>` requires the matching remote tag, downloads the published tag archive, computes its SHA256, and rewrites `Formula/devjournal.rb`.
-- `scripts/release.sh verify` checks that `Cargo.toml`, `Formula/devjournal.rb`, `README.md`, and this guide still describe the same release flow.
+- `scripts/release.sh verify` checks that `Cargo.toml`, `Formula/devjournal.rb`, the README maintainer handoff, and this guide still agree.
 
 ## Validation
 

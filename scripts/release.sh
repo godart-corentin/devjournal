@@ -72,80 +72,6 @@ sha256_file() {
     die "No SHA256 tool found (expected one of: sha256sum, shasum, openssl)"
 }
 
-replace_block() {
-    file_path=$1
-    pattern=$2
-    replacement_file=$3
-    require_file "$file_path"
-    require_file "$replacement_file"
-
-    BLOCK_CONTENT=$(cat "$replacement_file") perl -0pi -e "s/$pattern/\$ENV{BLOCK_CONTENT}/s" "$file_path"
-}
-
-homebrew_install_block() {
-    cat <<'EOF'
-**Homebrew:**
-
-You can install from the dedicated Homebrew tap:
-
-```bash
-brew tap godart-corentin/devjournal
-brew install devjournal
-brew install sem-cli
-```
-
-Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata.
-
-The tap repository lives at [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
-The in-repo [`Formula/devjournal.rb`](Formula/devjournal.rb) is the canonical release formula. Refresh it with `scripts/release.sh finalize <semver>` after the matching `v<package.version>` tag is published, then sync the result to the dedicated tap.
-
-**Update:**
-EOF
-}
-
-homebrew_release_block() {
-    cat <<'EOF'
-## Homebrew release flow
-
-`Cargo.toml` is the canonical release version source. Tag GitHub releases as `v<package.version>`.
-
-For each release:
-
-1. Run `scripts/release.sh prep <semver>` to update repo metadata for the next version.
-2. Commit the prep changes, create tag `v<semver>`, and push the branch plus tag.
-3. Wait for GitHub Actions to publish the release archives and `devjournal-checksums.txt`.
-4. Run `scripts/release.sh finalize <semver>` to refresh [`Formula/devjournal.rb`](Formula/devjournal.rb) from the published tag archive checksum.
-5. Commit the formula refresh and sync the same formula to [godart-corentin/homebrew-devjournal](https://github.com/godart-corentin/homebrew-devjournal).
-
-Run `scripts/release.sh verify` before opening a release PR or after syncing release metadata to confirm the crate version, formula tag, formula checksum, README wording, and maintainer guide still agree.
-
-## Setup
-EOF
-}
-
-rewrite_readme() {
-    repo_dir=$1
-    install_block_file=$(mktemp)
-    release_block_file=$(mktemp)
-    trap 'rm -f "$install_block_file" "$release_block_file"' EXIT INT TERM
-
-    homebrew_install_block >"$install_block_file"
-    homebrew_release_block >"$release_block_file"
-
-    replace_block \
-        "$repo_dir/$README_PATH" \
-        '\*\*Homebrew:\*\*.*?\n\*\*Update:\*\*' \
-        "$install_block_file"
-
-    replace_block \
-        "$repo_dir/$README_PATH" \
-        '## Homebrew (?:roadmap|release flow).*?\n## Setup' \
-        "$release_block_file"
-
-    trap - EXIT INT TERM
-    rm -f "$install_block_file" "$release_block_file"
-}
-
 set_cargo_version() {
     repo_dir=$1
     version=$2
@@ -223,11 +149,14 @@ verify_readme_text() {
     readme="$repo_dir/$README_PATH"
     require_file "$readme"
 
-    grep -F 'Cargo.toml` is the canonical release version source.' "$readme" >/dev/null 2>&1 \
-        || die "README is missing the canonical release-source wording"
-    grep -F 'Tag GitHub releases as `v<package.version>`.' "$readme" >/dev/null 2>&1 \
-        || die "README is missing the release tag convention"
+    grep -F '## Maintainers' "$readme" >/dev/null 2>&1 \
+        || die "README is missing the maintainers handoff section"
+    grep -F '[RELEASING.md](RELEASING.md)' "$readme" >/dev/null 2>&1 \
+        || die "README is missing the maintainers link to RELEASING.md"
+    grep -F 'canonical formula source for releases' "$readme" >/dev/null 2>&1 \
+        || die "README is missing the canonical formula-source wording"
     if grep -F 'future `homebrew-core` submission' "$readme" >/dev/null 2>&1 ||
+        grep -F '## Homebrew release flow' "$readme" >/dev/null 2>&1 ||
         grep -F '## Homebrew roadmap' "$readme" >/dev/null 2>&1 ||
         grep -F 'future work' "$readme" >/dev/null 2>&1; then
         die "README still contains outdated release-roadmap wording"
@@ -296,7 +225,6 @@ run_prep() {
     [ -n "$current_version" ] || die "Unable to read Cargo.toml version"
 
     set_cargo_version "$repo_dir" "$version"
-    rewrite_readme "$repo_dir"
 
     cat <<EOF
 Prepared release metadata for v$version in $repo_dir

@@ -73,7 +73,8 @@ test_prep_updates_repo_metadata() {
     "$SCRIPT" prep 1.0.0 --repo "$fixture_dir"
 
     assert_contains 'version = "1.0.0"' "$fixture_dir/Cargo.toml"
-    assert_contains 'Tag GitHub releases as `v<package.version>`.' "$fixture_dir/README.md"
+    assert_contains 'Release flow, packaging details, and versioning checks live in [RELEASING.md](RELEASING.md).' "$fixture_dir/README.md"
+    assert_contains 'Formula/devjournal.rb' "$fixture_dir/README.md"
     assert_not_contains 'future `homebrew-core` submission' "$fixture_dir/README.md"
 }
 
@@ -99,6 +100,14 @@ test_verify_rejects_roadmap_language() {
     fi
 
     assert_contains 'README still contains outdated release-roadmap wording' /tmp/release-roadmap.out
+}
+
+test_verify_accepts_user_facing_readme() {
+    fixture_dir=$(make_fixture)
+
+    "$SCRIPT" verify --repo "$fixture_dir" >/tmp/release-verify-readme.out 2>&1
+
+    assert_contains 'Release metadata is synchronized for version' /tmp/release-verify-readme.out
 }
 
 test_metadata_synced_reports_release_state() {
@@ -152,6 +161,7 @@ main() {
     test_prep_updates_repo_metadata
     test_verify_rejects_version_drift
     test_verify_rejects_roadmap_language
+    test_verify_accepts_user_facing_readme
     test_metadata_synced_reports_release_state
     test_finalize_rejects_missing_remote_tag
     test_finalize_writes_formula_from_published_archive
