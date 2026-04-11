@@ -5,7 +5,7 @@ use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const REPO: &str = "godart-corentin/dev-journal";
+const REPO: &str = "godart-corentin/devjournal";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CURRENT_TARGET: &str = env!("TARGET");
 const CHECKSUMS_ASSET: &str = "devjournal-checksums.txt";
@@ -379,7 +379,7 @@ mod tests {
 
         assert_eq!(
             sources.release_url,
-            "https://api.github.com/repos/godart-corentin/dev-journal/releases/latest"
+            "https://api.github.com/repos/godart-corentin/devjournal/releases/latest"
         );
     }
 

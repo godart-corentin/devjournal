@@ -29,7 +29,7 @@
 **macOS / Linux (install script):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/godart-corentin/dev-journal/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/godart-corentin/devjournal/main/install.sh | sh
 ```
 
 This downloads the latest pre-built binary to `~/.local/bin` by default. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
@@ -53,13 +53,13 @@ Homebrew installs `devjournal` itself. Install `sem` alongside it for the best s
 
 **Windows:**
 
-Install from the [latest GitHub release](https://github.com/godart-corentin/dev-journal/releases/latest). The shell installer is macOS/Linux-only, and `devjournal update` is currently disabled on Windows while the replacement flow is being hardened.
+Install from the [latest GitHub release](https://github.com/godart-corentin/devjournal/releases/latest). The shell installer is macOS/Linux-only, and `devjournal update` is currently disabled on Windows while the replacement flow is being hardened.
 
 **Build from source** (requires Rust):
 
 ```bash
-git clone git@github.com:godart-corentin/dev-journal.git
-cd dev-journal
+git clone git@github.com:godart-corentin/devjournal.git
+cd devjournal
 cargo build --release
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
@@ -296,6 +296,22 @@ devjournal completions zsh > ~/.zfunc/_devjournal
 ```fish
 devjournal completions fish > ~/.config/fish/completions/devjournal.fish
 ```
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs, request features, set up the project locally, and prepare focused pull requests.
+
+## Code of Conduct
+
+This project follows the guidelines in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) to help keep the community welcoming and respectful for everyone.
+
+## Security
+
+If you believe you have found a security issue, please follow the private reporting guidance in [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## License
+
+`devjournal` is licensed under the [Apache-2.0 License](LICENSE).
 
 ## Maintainers
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="godart-corentin/dev-journal"
+REPO="godart-corentin/devjournal"
 INSTALL_DIR="${DEVJOURNAL_INSTALL_DIR:-$HOME/.local/bin}"
 CHECKSUMS_ASSET="devjournal-checksums.txt"
 
