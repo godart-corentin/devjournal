@@ -25,7 +25,17 @@ class Devjournal < Formula
   end
 
   test do
+    ENV["HOME"] = testpath.to_s
+    ENV.delete("XDG_CONFIG_HOME")
     config_path = shell_output("#{bin}/devjournal config").strip
-    assert_match "devjournal", config_path
+
+    expected_path =
+      if OS.mac?
+        testpath/"Library/Application Support/devjournal/config.toml"
+      else
+        testpath/".config/devjournal/config.toml"
+      end
+
+    assert_equal expected_path.to_s, config_path
   end
 end
