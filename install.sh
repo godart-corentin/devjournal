@@ -59,6 +59,7 @@ main() {
     mkdir -p "$INSTALL_DIR"
     mv "$tmpdir/devjournal" "$INSTALL_DIR/devjournal"
     chmod +x "$INSTALL_DIR/devjournal"
+    printf '%s\n' 'install.sh' >"$INSTALL_DIR/.devjournal-installed-by-install-sh"
 
     echo "Installed devjournal ${tag} to ${INSTALL_DIR}/devjournal"
     install_sem "$tmpdir"

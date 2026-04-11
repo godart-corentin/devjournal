@@ -39,6 +39,7 @@ The installer:
 - Downloads the matching release archive
 - Downloads the published SHA256 checksum manifest
 - Verifies the archive before extracting it
+- Writes an install marker so `devjournal update` can keep updating script installs
 - Tries to install `sem` automatically when Homebrew or Cargo is available
 
 **Homebrew:**
@@ -49,7 +50,7 @@ brew install devjournal
 brew install sem-cli
 ```
 
-Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata.
+Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata. For Homebrew installs, use `brew upgrade devjournal` instead of `devjournal update`.
 
 **Windows:**
 
@@ -134,7 +135,7 @@ Provider defaults from the current CLI:
 
 - The install script supports macOS and Linux
 - Windows users should install from the GitHub releases page
-- `devjournal update` works on macOS and Linux and verifies the downloaded archive before replacing the binary
+- `devjournal update` self-updates only for binaries installed through `install.sh`; Homebrew installs should use `brew upgrade devjournal`
 - Self-update is currently disabled on Windows
 
 ## Configuration essentials

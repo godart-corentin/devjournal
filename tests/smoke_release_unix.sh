@@ -183,9 +183,22 @@ UPDATE_OUTPUT=$(
     DEVJOURNAL_UPDATE_ASSET_BASE_URL="http://127.0.0.1:$PORT" \
         "$BIN" update 2>&1
 )
-assert_contains "$UPDATE_OUTPUT" "Updated devjournal from" "update command did not report a successful Unix update"
+assert_contains "$UPDATE_OUTPUT" "Manual update required on Unix" "update command did not report the manual upgrade path"
+assert_contains "$UPDATE_OUTPUT" "brew upgrade devjournal" "update command did not tell Homebrew users how to upgrade"
 
 POST_UPDATE_STATUS=$("$BIN" status)
-assert_contains "$POST_UPDATE_STATUS" "devjournal daemon: not running" "updated binary was not runnable after self-update"
+assert_contains "$POST_UPDATE_STATUS" "devjournal daemon: not running" "binary was not runnable after the update reminder"
+
+printf '%s\n' 'install.sh' >"$INSTALL_DIR/.devjournal-installed-by-install-sh"
+
+SCRIPT_UPDATE_OUTPUT=$(
+    DEVJOURNAL_UPDATE_RELEASE_URL="http://127.0.0.1:$PORT/release.json" \
+    DEVJOURNAL_UPDATE_ASSET_BASE_URL="http://127.0.0.1:$PORT" \
+        "$BIN" update 2>&1
+)
+assert_contains "$SCRIPT_UPDATE_OUTPUT" "Updated devjournal from" "install.sh update path did not self-update"
+
+POST_SCRIPT_UPDATE_STATUS=$("$BIN" status)
+assert_contains "$POST_SCRIPT_UPDATE_STATUS" "devjournal daemon: not running" "binary was not runnable after the install.sh update"
 
 echo "Unix release smoke passed for $ASSET_NAME"

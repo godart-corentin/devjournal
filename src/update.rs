@@ -11,6 +11,7 @@ const CURRENT_TARGET: &str = env!("TARGET");
 const CHECKSUMS_ASSET: &str = "devjournal-checksums.txt";
 const RELEASE_URL_ENV: &str = "DEVJOURNAL_UPDATE_RELEASE_URL";
 const ASSET_BASE_URL_ENV: &str = "DEVJOURNAL_UPDATE_ASSET_BASE_URL";
+const INSTALL_MARKER_FILE: &str = ".devjournal-installed-by-install-sh";
 
 pub fn run_update() -> Result<()> {
     #[cfg(windows)]
@@ -27,6 +28,13 @@ pub fn run_update() -> Result<()> {
 
 #[cfg(unix)]
 fn run_update_unix() -> Result<()> {
+    let current_exe = env::current_exe().context("Cannot determine current executable")?;
+
+    if !installed_via_install_sh(&current_exe) {
+        println!("{}", manual_unix_update_message());
+        return Ok(());
+    }
+
     let sources = UpdateSources::from_env();
 
     println!("Current version: v{CURRENT_VERSION} ({CURRENT_TARGET})");
@@ -68,18 +76,13 @@ fn run_update_unix() -> Result<()> {
     let expected_checksum = expected_checksum_for_asset(asset_name, &checksums)?;
     verify_archive_checksum(&archive_path, &expected_checksum)?;
 
-    // Extract
     let new_binary = extract(&archive_path, &tmpdir)?;
-
-    // Replace current binary
-    let current_exe = std::env::current_exe().context("Cannot determine current executable")?;
     let backup = current_exe.with_extension("old");
 
     std::fs::rename(&current_exe, &backup)
         .context("Failed to move current binary (try running with appropriate permissions)")?;
 
     if let Err(e) = std::fs::rename(&new_binary, &current_exe) {
-        // Restore backup on failure
         let _ = std::fs::rename(&backup, &current_exe);
         return Err(e).context("Failed to install new binary");
     }
@@ -254,6 +257,18 @@ fn sha256_file(path: &Path) -> Result<String> {
 #[cfg_attr(not(any(test, windows)), allow(dead_code))]
 fn manual_windows_update_message() -> &'static str {
     "Manual update required on Windows: please reinstall devjournal from the latest release. Self-update is temporarily disabled until the Windows replacement flow is hardened."
+}
+
+#[cfg_attr(not(any(test, windows, unix)), allow(dead_code))]
+fn manual_unix_update_message() -> &'static str {
+    "Manual update required on Unix: this install was not created by install.sh. Please upgrade devjournal with your package manager. For Homebrew installs, use `brew upgrade devjournal` instead of `devjournal update`."
+}
+
+fn installed_via_install_sh(current_exe: &Path) -> bool {
+    current_exe
+        .parent()
+        .map(|dir| dir.join(INSTALL_MARKER_FILE).exists())
+        .unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -474,6 +489,28 @@ mod tests {
     #[test]
     fn windows_update_requires_manual_reinstall_message() {
         assert!(manual_windows_update_message().contains("Manual update required"));
+    }
+
+    #[test]
+    fn unix_update_requires_manual_upgrade_message() {
+        assert!(manual_unix_update_message().contains("brew upgrade devjournal"));
+    }
+
+    #[test]
+    fn install_marker_enables_unix_self_update_only_when_present() {
+        let dir = tempdir().unwrap();
+        let binary = dir.path().join("devjournal");
+        std::fs::write(&binary, b"binary").unwrap();
+
+        assert!(!installed_via_install_sh(&binary));
+
+        std::fs::write(
+            dir.path().join(INSTALL_MARKER_FILE),
+            b"installed by install.sh",
+        )
+        .unwrap();
+
+        assert!(installed_via_install_sh(&binary));
     }
 
     #[test]
