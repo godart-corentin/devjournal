@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO_SLUG="godart-corentin/dev-journal"
+REPO_SLUG="godart-corentin/devjournal"
 FORMULA_PATH="Formula/devjournal.rb"
 README_PATH="README.md"
 RELEASING_PATH="RELEASING.md"

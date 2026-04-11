@@ -1,10 +1,10 @@
 class Devjournal < Formula
   desc "Automatic intelligent work diary for local git repositories"
-  homepage "https://github.com/godart-corentin/dev-journal"
-  url "https://github.com/godart-corentin/dev-journal/archive/refs/tags/v0.5.0.tar.gz"
+  homepage "https://github.com/godart-corentin/devjournal"
+  url "https://github.com/godart-corentin/devjournal/archive/refs/tags/v0.5.0.tar.gz"
   sha256 "1997d9d87861aacf23ec7f7ed071e1e2ce56a4c16097d9ac2cd606f515e16b82"
   license "Apache-2.0"
-  head "https://github.com/godart-corentin/dev-journal.git", branch: "main"
+  head "https://github.com/godart-corentin/devjournal.git", branch: "main"
 
   depends_on "rust" => :build
 
