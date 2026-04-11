@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -47,7 +47,68 @@ impl RepoConfig {
     }
 }
 
+#[cfg(test)]
+fn test_config_path_override() -> &'static std::sync::Mutex<Option<PathBuf>> {
+    use std::sync::{Mutex, OnceLock};
+
+    static CONFIG_PATH_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    CONFIG_PATH_OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+fn repo_display_name_in_use(repos: &[RepoConfig], candidate: &str) -> bool {
+    repos.iter().any(|repo| repo.display_name() == candidate)
+}
+
+fn unique_repo_display_name(repos: &[RepoConfig], base: &str) -> String {
+    let mut suffix = 1u32;
+    let mut candidate = base.to_string();
+
+    while repo_display_name_in_use(repos, &candidate) {
+        suffix += 1;
+        candidate = format!("{}-{}", base, suffix);
+    }
+
+    candidate
+}
+
+pub fn resolve_repo<'a>(repos: &'a [RepoConfig], query: &str) -> Result<&'a RepoConfig> {
+    if let Some(repo) = repos.iter().find(|repo| repo.path == query) {
+        return Ok(repo);
+    }
+
+    let matches: Vec<&RepoConfig> = repos
+        .iter()
+        .filter(|repo| repo.display_name() == query)
+        .collect();
+
+    match matches.len() {
+        1 => Ok(matches[0]),
+        0 => {
+            if Path::new(query).exists() {
+                let canonical = std::fs::canonicalize(query)
+                    .with_context(|| format!("Failed to resolve repo path: {}", query))?;
+                let canonical = canonical.to_string_lossy().to_string();
+                let canonical = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+                if let Some(repo) = repos.iter().find(|repo| repo.path == canonical) {
+                    return Ok(repo);
+                }
+            }
+            anyhow::bail!("Repo '{}' not found in config", query)
+        }
+        _ => anyhow::bail!(
+            "Repo name '{}' is ambiguous. Use the exact path shown by `devjournal list`.",
+            query
+        ),
+    }
+}
+
 pub fn config_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(path) = test_config_path_override().lock().unwrap().clone() {
+            return path;
+        }
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("devjournal")
@@ -94,11 +155,6 @@ pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
     let mut config = load_or_default();
     let canonical =
         std::fs::canonicalize(path).with_context(|| format!("Path does not exist: {}", path))?;
-    let name = name.or_else(|| {
-        canonical
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-    });
     let path_str = canonical.to_string_lossy().to_string();
     // Strip Windows extended-length path prefix (\\?\) which canonicalize adds on Windows
     #[cfg(windows)]
@@ -110,6 +166,23 @@ pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
         println!("Repo already tracked: {}", path_str);
         return Ok(());
     }
+
+    let name = name
+        .and_then(|name| {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .or_else(|| {
+            canonical
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .map(|base| unique_repo_display_name(&config.repos, &base));
+
     config.repos.push(RepoConfig {
         path: path_str.clone(),
         name,
@@ -121,13 +194,12 @@ pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
 
 pub fn remove_repo(path: &str) -> Result<()> {
     let mut config = load()?;
-    let before = config.repos.len();
-    config.repos.retain(|r| r.path != path);
-    if config.repos.len() == before {
-        anyhow::bail!("Repo not found in config: {}", path);
-    }
+    let repo = resolve_repo(&config.repos, path)?;
+    let removed_path = repo.path.clone();
+    let removed_name = repo.display_name().to_string();
+    config.repos.retain(|r| r.path != removed_path);
     save(&config)?;
-    println!("Removed: {}", path);
+    println!("Removed: {}", removed_name);
     Ok(())
 }
 
@@ -305,10 +377,57 @@ pub fn api_key(config: &LlmConfig) -> Option<String> {
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
 
     fn env_var_test_mutex() -> &'static Mutex<()> {
         static ENV_VAR_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
         ENV_VAR_TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
+
+    fn config_home_test_mutex() -> &'static Mutex<()> {
+        static CONFIG_HOME_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        CONFIG_HOME_TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
+
+    fn cwd_test_mutex() -> &'static Mutex<()> {
+        static CWD_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        CWD_TEST_MUTEX.get_or_init(|| Mutex::new(()))
+    }
+
+    struct ConfigPathGuard {
+        previous: Option<PathBuf>,
+    }
+
+    impl Drop for ConfigPathGuard {
+        fn drop(&mut self) {
+            *test_config_path_override().lock().unwrap() = self.previous.take();
+        }
+    }
+
+    struct CwdGuard {
+        previous: PathBuf,
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).unwrap();
+        }
+    }
+
+    fn set_temp_config_path() -> (tempfile::TempDir, ConfigPathGuard) {
+        let dir = tempdir().unwrap();
+        let override_path = dir.path().join("devjournal").join("config.toml");
+        let previous = test_config_path_override()
+            .lock()
+            .unwrap()
+            .replace(override_path);
+        (dir, ConfigPathGuard { previous })
+    }
+
+    fn set_temp_current_dir(path: &Path) -> CwdGuard {
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(path).unwrap();
+        CwdGuard { previous }
     }
 
     #[test]
@@ -404,5 +523,112 @@ name = "my-repo"
             Some(value) => std::env::set_var("DEVJOURNAL_API_KEY", value),
             None => std::env::remove_var("DEVJOURNAL_API_KEY"),
         }
+    }
+
+    #[test]
+    fn test_add_repo_suffixes_duplicate_display_names() {
+        let _guard = config_home_test_mutex().lock().unwrap();
+        let (_dir, _config_path_guard) = set_temp_config_path();
+
+        let root = tempdir().unwrap();
+        let repo_a = root.path().join("one/project");
+        let repo_b = root.path().join("two/project");
+        let repo_c = root.path().join("three/project");
+        std::fs::create_dir_all(&repo_a).unwrap();
+        std::fs::create_dir_all(&repo_b).unwrap();
+        std::fs::create_dir_all(&repo_c).unwrap();
+
+        add_repo(repo_a.to_str().unwrap(), None).unwrap();
+        add_repo(repo_b.to_str().unwrap(), None).unwrap();
+        add_repo(repo_c.to_str().unwrap(), None).unwrap();
+
+        let config = load().unwrap();
+        let names: Vec<_> = config
+            .repos
+            .iter()
+            .map(|repo| repo.display_name().to_string())
+            .collect();
+
+        assert_eq!(names, vec!["project", "project-2", "project-3"]);
+    }
+
+    #[test]
+    fn test_resolve_repo_by_path_name_and_missing() {
+        let repos = vec![
+            RepoConfig {
+                path: "/repo/a".to_string(),
+                name: Some("alpha".to_string()),
+            },
+            RepoConfig {
+                path: "/repo/b".to_string(),
+                name: Some("beta".to_string()),
+            },
+        ];
+
+        assert_eq!(resolve_repo(&repos, "/repo/a").unwrap().path, "/repo/a");
+        assert_eq!(resolve_repo(&repos, "beta").unwrap().path, "/repo/b");
+
+        let err = resolve_repo(&repos, "missing").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_resolve_repo_rejects_ambiguous_display_name() {
+        let repos = vec![
+            RepoConfig {
+                path: "/repo/a".to_string(),
+                name: Some("dup".to_string()),
+            },
+            RepoConfig {
+                path: "/repo/b".to_string(),
+                name: Some("dup".to_string()),
+            },
+        ];
+
+        let err = resolve_repo(&repos, "dup").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn test_remove_repo_by_display_name() {
+        let _guard = config_home_test_mutex().lock().unwrap();
+        let (_dir, _config_path_guard) = set_temp_config_path();
+
+        let root = tempdir().unwrap();
+        let repo_a = root.path().join("one/project");
+        let repo_b = root.path().join("two/project");
+        std::fs::create_dir_all(&repo_a).unwrap();
+        std::fs::create_dir_all(&repo_b).unwrap();
+
+        add_repo(repo_a.to_str().unwrap(), None).unwrap();
+        add_repo(repo_b.to_str().unwrap(), None).unwrap();
+
+        remove_repo("project-2").unwrap();
+
+        let config = load().unwrap();
+        assert_eq!(config.repos.len(), 1);
+        assert_eq!(
+            config.repos[0].path,
+            std::fs::canonicalize(&repo_a)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        );
+    }
+
+    #[test]
+    fn test_remove_repo_from_current_directory() {
+        let _config_guard = config_home_test_mutex().lock().unwrap();
+        let _cwd_guard = cwd_test_mutex().lock().unwrap();
+        let (_dir, _config_path_guard) = set_temp_config_path();
+
+        let repo = tempdir().unwrap();
+        let _cwd = set_temp_current_dir(repo.path());
+
+        add_repo(".", None).unwrap();
+        remove_repo(".").unwrap();
+
+        let config = load().unwrap();
+        assert!(config.repos.is_empty());
     }
 }
