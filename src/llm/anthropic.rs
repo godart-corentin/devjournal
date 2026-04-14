@@ -3,12 +3,12 @@ use crate::db::Event;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-pub struct ClaudeBackend {
+pub struct AnthropicBackend {
     pub api_key: String,
     pub model: String,
 }
 
-impl LlmBackend for ClaudeBackend {
+impl LlmBackend for AnthropicBackend {
     fn summarize(
         &self,
         events: &[Event],
@@ -27,15 +27,15 @@ impl LlmBackend for ClaudeBackend {
             .set("anthropic-version", "2023-06-01")
             .set("content-type", "application/json")
             .send_json(body)
-            .context("Failed to call Claude API")?;
+            .context("Failed to call Anthropic API")?;
 
         let json: serde_json::Value = response
             .into_json()
-            .context("Failed to parse Claude API response")?;
+            .context("Failed to parse Anthropic API response")?;
 
         json["content"][0]["text"]
             .as_str()
             .map(|s| s.to_string())
-            .context("Unexpected Claude API response shape")
+            .context("Unexpected Anthropic API response shape")
     }
 }

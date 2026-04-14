@@ -1,11 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Config {
-    #[serde(default = "default_general")]
+    #[serde(default)]
     pub general: GeneralConfig,
+    #[serde(default)]
     pub llm: LlmConfig,
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
@@ -13,31 +16,101 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GeneralConfig {
+    #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
+    #[serde(default)]
     pub author: Option<String>,
+    #[serde(default)]
     pub retention_days: Option<u32>,
 }
 
-fn default_general() -> GeneralConfig {
-    GeneralConfig {
-        poll_interval_secs: 60,
-        author: None,
-        retention_days: None,
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: default_poll_interval_secs(),
+            author: None,
+            retention_days: None,
+        }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+const fn default_poll_interval_secs() -> u64 {
+    60
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct LlmConfig {
-    pub provider: String,
+    #[serde(default)]
+    pub provider: LlmProvider,
+    #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
     pub base_url: Option<String>,
+    #[serde(default)]
     pub system_prompt: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmProvider {
+    #[default]
+    Anthropic,
+    OpenAi,
+    Ollama,
+}
+
+impl LlmProvider {
+    pub const ALL: [Self; 3] = [Self::Anthropic, Self::OpenAi, Self::Ollama];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+            Self::Ollama => "ollama",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Anthropic => "Anthropic",
+            Self::OpenAi => "OpenAI",
+            Self::Ollama => "Local model (Ollama)",
+        }
+    }
+
+    pub const fn default_model(self) -> &'static str {
+        match self {
+            Self::Anthropic => "claude-sonnet-4-6",
+            Self::OpenAi => "gpt-4o-mini",
+            Self::Ollama => "llama3.2",
+        }
+    }
+
+    pub const fn requires_api_key(self) -> bool {
+        !matches!(self, Self::Ollama)
+    }
+
+    pub const fn suggested_models(self) -> &'static [&'static str] {
+        match self {
+            Self::Anthropic => &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
+            Self::OpenAi => &["gpt-4o-mini"],
+            Self::Ollama => &["llama3.2"],
+        }
+    }
+}
+
+impl std::fmt::Display for LlmProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RepoConfig {
     pub path: String,
+    #[serde(default)]
     pub name: Option<String>,
 }
 
@@ -55,20 +128,42 @@ fn test_config_path_override() -> &'static std::sync::Mutex<Option<PathBuf>> {
     CONFIG_PATH_OVERRIDE.get_or_init(|| Mutex::new(None))
 }
 
+fn pathbuf_to_string(path: &Path) -> Cow<'_, str> {
+    let raw = path.to_string_lossy();
+
+    #[cfg(windows)]
+    {
+        if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+            return Cow::Owned(stripped.to_string());
+        }
+    }
+
+    raw
+}
+
+fn normalize_path(path: &Path) -> Result<String> {
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("Path does not exist: {}", path.display()))?;
+    Ok(pathbuf_to_string(&canonical).into_owned())
+}
+
 fn repo_display_name_in_use(repos: &[RepoConfig], candidate: &str) -> bool {
     repos.iter().any(|repo| repo.display_name() == candidate)
 }
 
 fn unique_repo_display_name(repos: &[RepoConfig], base: &str) -> String {
-    let mut suffix = 1u32;
-    let mut candidate = base.to_string();
-
-    while repo_display_name_in_use(repos, &candidate) {
-        suffix += 1;
-        candidate = format!("{}-{}", base, suffix);
+    if !repo_display_name_in_use(repos, base) {
+        return base.to_string();
     }
 
-    candidate
+    for suffix in 2u32.. {
+        let candidate = format!("{base}-{suffix}");
+        if !repo_display_name_in_use(repos, &candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!("u32 suffix space exhausted")
 }
 
 pub fn resolve_repo<'a>(repos: &'a [RepoConfig], query: &str) -> Result<&'a RepoConfig> {
@@ -76,28 +171,25 @@ pub fn resolve_repo<'a>(repos: &'a [RepoConfig], query: &str) -> Result<&'a Repo
         return Ok(repo);
     }
 
-    let matches: Vec<&RepoConfig> = repos
+    let matches: Vec<_> = repos
         .iter()
         .filter(|repo| repo.display_name() == query)
         .collect();
 
-    match matches.len() {
-        1 => Ok(matches[0]),
-        0 => {
+    match matches.as_slice() {
+        [repo] => Ok(*repo),
+        [] => {
             if Path::new(query).exists() {
-                let canonical = std::fs::canonicalize(query)
-                    .with_context(|| format!("Failed to resolve repo path: {}", query))?;
-                let canonical = canonical.to_string_lossy().to_string();
-                let canonical = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+                let canonical = normalize_path(Path::new(query))
+                    .with_context(|| format!("Failed to resolve repo path: {query}"))?;
                 if let Some(repo) = repos.iter().find(|repo| repo.path == canonical) {
                     return Ok(repo);
                 }
             }
-            anyhow::bail!("Repo '{}' not found in config", query)
+            bail!("Repo '{query}' not found in config");
         }
-        _ => anyhow::bail!(
-            "Repo name '{}' is ambiguous. Use the exact path shown by `devjournal list`.",
-            query
+        _ => bail!(
+            "Repo name '{query}' is ambiguous. Use the exact path shown by `devjournal list`."
         ),
     }
 }
@@ -109,6 +201,7 @@ pub fn config_path() -> PathBuf {
             return path;
         }
     }
+
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("devjournal")
@@ -118,77 +211,67 @@ pub fn config_path() -> PathBuf {
 pub fn load() -> Result<Config> {
     let path = config_path();
     if !path.exists() {
-        anyhow::bail!(
+        bail!(
             "Config file not found at {}. Run `devjournal init` to get started.",
             path.display()
         );
     }
+
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config at {}", path.display()))?;
-    let config: Config = toml::from_str(&content).with_context(|| "Failed to parse config.toml")?;
-    Ok(config)
+
+    toml::from_str(&content).with_context(|| format!("Failed to parse TOML in {}", path.display()))
 }
 
 pub fn load_or_default() -> Config {
-    load().unwrap_or_else(|_| Config {
-        general: default_general(),
-        llm: LlmConfig {
-            provider: "claude".to_string(),
-            api_key: None,
-            model: None,
-            base_url: None,
-            system_prompt: None,
-        },
-        repos: vec![],
-    })
+    load().unwrap_or_default()
 }
 
 pub fn save(config: &Config) -> Result<()> {
     let path = config_path();
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    let content = toml::to_string_pretty(config)?;
-    std::fs::write(&path, content)?;
+    let parent = path
+        .parent()
+        .context("Config path has no parent directory")?;
+
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+
+    let content = toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
+
+    std::fs::write(&path, content)
+        .with_context(|| format!("Failed to write config to {}", path.display()))?;
+
     Ok(())
 }
 
 pub fn add_repo(path: &str, name: Option<String>) -> Result<()> {
     let mut config = load_or_default();
-    let canonical =
-        std::fs::canonicalize(path).with_context(|| format!("Path does not exist: {}", path))?;
-    let path_str = canonical.to_string_lossy().to_string();
-    // Strip Windows extended-length path prefix (\\?\) which canonicalize adds on Windows
-    #[cfg(windows)]
-    let path_str = path_str
-        .strip_prefix(r"\\?\")
-        .unwrap_or(&path_str)
-        .to_string();
+    let path_str = normalize_path(Path::new(path))?;
+
     if config.repos.iter().any(|r| r.path == path_str) {
-        println!("Repo already tracked: {}", path_str);
+        println!("Repo already tracked: {path_str}");
         return Ok(());
     }
 
+    let default_name = Path::new(&path_str)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+
     let name = name
-        .and_then(|name| {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .or_else(|| {
-            canonical
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-        })
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or(default_name)
         .map(|base| unique_repo_display_name(&config.repos, &base));
 
     config.repos.push(RepoConfig {
         path: path_str.clone(),
         name,
     });
+
     save(&config)?;
-    println!("Now tracking: {}", path_str);
+    println!("Now tracking: {path_str}");
     Ok(())
 }
 
@@ -197,45 +280,167 @@ pub fn remove_repo(path: &str) -> Result<()> {
     let repo = resolve_repo(&config.repos, path)?;
     let removed_path = repo.path.clone();
     let removed_name = repo.display_name().to_string();
+
     config.repos.retain(|r| r.path != removed_path);
     save(&config)?;
-    println!("Removed: {}", removed_name);
+
+    println!("Removed: {removed_name}");
     Ok(())
 }
 
-fn prompt_line(message: &str) -> String {
-    use std::io::Write;
-    print!("{}", message);
-    std::io::stdout().flush().ok();
+fn prompt_line(message: &str) -> Result<String> {
+    print!("{message}");
+    io::stdout()
+        .flush()
+        .context("Failed to flush prompt to stdout")?;
+
     let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf).ok();
-    buf.trim().to_string()
+    let read = io::stdin()
+        .read_line(&mut buf)
+        .context("Failed to read input from stdin")?;
+
+    if read == 0 {
+        bail!("Interactive setup requires a terminal with readable stdin.");
+    }
+
+    Ok(buf.trim().to_string())
+}
+
+fn select_provider_interactive() -> Result<LlmProvider> {
+    println!("\nChoose a provider:");
+    for (i, provider) in LlmProvider::ALL.iter().enumerate() {
+        println!("{}. {}", i + 1, provider.label());
+    }
+
+    loop {
+        let input = prompt_line("\n> ")?;
+
+        if input.is_empty() {
+            return Ok(LlmProvider::default());
+        }
+
+        if let Ok(index) = input.parse::<usize>() {
+            if let Some(provider) = LlmProvider::ALL.get(index.saturating_sub(1)) {
+                return Ok(*provider);
+            }
+        }
+
+        println!("Please choose a valid number.");
+    }
+}
+
+fn select_model_interactive(provider: LlmProvider) -> Result<String> {
+    match provider {
+        LlmProvider::Anthropic => {
+            let models = provider.suggested_models();
+
+            println!("\nSelect model:");
+            for (i, model) in models.iter().enumerate() {
+                if i == 0 {
+                    println!("{}. {} (default)", i + 1, model);
+                } else {
+                    println!("{}. {}", i + 1, model);
+                }
+            }
+
+            loop {
+                let input = prompt_line("\n> ")?;
+
+                if input.is_empty() {
+                    return Ok(models[0].to_string());
+                }
+
+                if let Ok(index) = input.parse::<usize>() {
+                    if let Some(model) = models.get(index.saturating_sub(1)) {
+                        return Ok((*model).to_string());
+                    }
+                }
+
+                println!("Please choose a valid number.");
+            }
+        }
+        LlmProvider::OpenAi | LlmProvider::Ollama => {
+            let default_model = provider.default_model();
+            let entered = prompt_line(&format!("\nSelect model [{default_model}]:\n> "))?;
+            if entered.is_empty() {
+                Ok(default_model.to_string())
+            } else {
+                Ok(entered)
+            }
+        }
+    }
+}
+
+pub fn llm_needs_setup(llm: &LlmConfig) -> bool {
+    if llm.model.as_deref().is_none_or(str::is_empty) {
+        return true;
+    }
+
+    if !llm.provider.requires_api_key() {
+        return false;
+    }
+
+    api_key(llm).is_none()
+}
+
+pub fn ensure_llm_configured_interactive(config: &mut Config) -> Result<()> {
+    if !llm_needs_setup(&config.llm) {
+        return Ok(());
+    }
+
+    println!("No LLM configured.\n");
+    let provider = select_provider_interactive()?;
+
+    let api_key = if provider.requires_api_key() {
+        loop {
+            let key = prompt_line("\nEnter your API key:\n> ")?;
+            if !key.is_empty() {
+                break Some(key);
+            }
+            println!("API key is required for this provider.");
+        }
+    } else {
+        None
+    };
+
+    let model = select_model_interactive(provider)?;
+
+    config.llm = LlmConfig {
+        provider,
+        api_key,
+        model: Some(model),
+        base_url: config.llm.base_url.clone(),
+        system_prompt: config.llm.system_prompt.clone(),
+    };
+
+    save(config)
 }
 
 pub fn build_config(
     author: Option<String>,
-    provider: &str,
+    provider: LlmProvider,
     api_key: Option<String>,
     model: &str,
     repo_path: Option<String>,
 ) -> Config {
-    let repos = match repo_path {
-        Some(path) => {
-            let name = std::path::Path::new(&path)
+    let repos = repo_path
+        .map(|path| {
+            let name = Path::new(&path)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned());
+
             vec![RepoConfig { path, name }]
-        }
-        None => vec![],
-    };
+        })
+        .unwrap_or_default();
+
     Config {
         general: GeneralConfig {
-            poll_interval_secs: 60,
+            poll_interval_secs: default_poll_interval_secs(),
             author,
             retention_days: None,
         },
         llm: LlmConfig {
-            provider: provider.to_string(),
+            provider,
             api_key,
             model: Some(model.to_string()),
             base_url: None,
@@ -255,84 +460,45 @@ pub fn init() -> Result<()> {
 
     println!("Welcome to devjournal! Let's set up your configuration.\n");
 
-    // Author
     let git_name = git2::Config::open_default()
         .ok()
         .and_then(|c| c.get_string("user.name").ok());
+
     let author_prompt = match &git_name {
-        Some(name) => format!("Author [{}]: ", name),
+        Some(name) => format!("Author [{name}]: "),
         None => "Author (leave blank to skip): ".to_string(),
     };
-    let author_input = prompt_line(&author_prompt);
+
+    let author_input = prompt_line(&author_prompt)?;
     let author = if author_input.is_empty() {
         git_name
     } else {
         Some(author_input)
     };
 
-    // LLM provider
-    println!("\nLLM provider:");
-    println!("  1) claude (default)");
-    println!("  2) openai");
-    println!("  3) ollama");
-    let provider_input = prompt_line("Choose [1]: ");
-    let provider = match provider_input.as_str() {
-        "2" => "openai",
-        "3" => "ollama",
-        _ => "claude",
-    };
+    let provider = select_provider_interactive()?;
 
-    // API key (not for ollama)
-    let api_key = if provider != "ollama" {
+    let api_key = if provider.requires_api_key() {
         loop {
-            let key = prompt_line("API key: ");
+            let key = prompt_line("API key: ")?;
             if !key.is_empty() {
                 break Some(key);
             }
-            println!("API key is required for {}.", provider);
+            println!("API key is required for {}.", provider.as_str());
         }
     } else {
         None
     };
 
-    // Model
-    let model = match provider {
-        "claude" => {
-            println!("\nModel:");
-            println!("  1) claude-sonnet-4-6 (default)");
-            println!("  2) claude-opus-4-6");
-            println!("  3) claude-haiku-4-5");
-            let m = prompt_line("Choose [1]: ");
-            match m.as_str() {
-                "2" => "claude-opus-4-6",
-                "3" => "claude-haiku-4-5",
-                _ => "claude-sonnet-4-6",
-            }
-        }
-        "openai" => {
-            println!("\nModel:");
-            println!("  1) gpt-4o (default)");
-            println!("  2) gpt-5.4");
-            let m = prompt_line("Choose [1]: ");
-            match m.as_str() {
-                "2" => "gpt-5.4",
-                _ => "gpt-4o",
-            }
-        }
-        _ => {
-            // ollama
-            println!("\nModel set to llama3.2 (default for ollama).");
-            "llama3.2"
-        }
-    };
+    let model = select_model_interactive(provider)?;
 
-    // Current dir as repo?
     let repo_path = if git2::Repository::open(".").is_ok() {
         let cwd = std::env::current_dir()
             .ok()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let answer = prompt_line(&format!("\nAdd {} to watched repos? [Y/n]: ", cwd));
+
+        let answer = prompt_line(&format!("\nAdd {cwd} to watched repos? [Y/n]: "))?;
         if answer.is_empty() || answer.eq_ignore_ascii_case("y") {
             Some(cwd)
         } else {
@@ -342,11 +508,12 @@ pub fn init() -> Result<()> {
         None
     };
 
-    let config = build_config(author, provider, api_key, model, repo_path);
+    let config = build_config(author, provider, api_key, &model, repo_path);
     save(&config)?;
 
     println!("\nConfig written to {}", path.display());
     println!("You can edit that file directly to update your settings.");
+
     let sem_probe = crate::sem::probe();
     println!(
         "Semantic enrichment: {} ({})",
@@ -356,15 +523,16 @@ pub fn init() -> Result<()> {
     if sem_probe.status != crate::sem::SemIntegrationStatus::Active {
         println!("Install hint: {}", sem_probe.install_hint);
     }
-    println!("\nRun `devjournal start` to begin tracking.");
 
+    println!("\nRun `devjournal start` to begin tracking.");
     Ok(())
 }
 
 pub fn api_key(config: &LlmConfig) -> Option<String> {
     std::env::var("DEVJOURNAL_API_KEY")
         .ok()
-        .or_else(|| config.api_key.clone())
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.api_key.clone().filter(|s| !s.is_empty()))
 }
 
 #[cfg(test)]
@@ -428,7 +596,7 @@ mod tests {
     fn test_parse_valid_config() {
         let toml = r#"
 [llm]
-provider = "claude"
+provider = "anthropic"
 api_key = "sk-test"
 model = "claude-sonnet-4-6"
 
@@ -437,10 +605,10 @@ path = "/tmp/repo1"
 name = "my-repo"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.llm.provider, "claude");
+        assert_eq!(config.llm.provider, LlmProvider::Anthropic);
         assert_eq!(config.repos.len(), 1);
         assert_eq!(config.repos[0].display_name(), "my-repo");
-        assert_eq!(config.general.poll_interval_secs, 60); // default
+        assert_eq!(config.general.poll_interval_secs, 60);
     }
 
     #[test]
@@ -456,13 +624,13 @@ name = "my-repo"
     fn test_build_config_claude() {
         let config = build_config(
             Some("Alice".to_string()),
-            "claude",
+            LlmProvider::Anthropic,
             Some("sk-ant-test".to_string()),
             "claude-sonnet-4-6",
             None,
         );
         assert_eq!(config.general.author, Some("Alice".to_string()));
-        assert_eq!(config.llm.provider, "claude");
+        assert_eq!(config.llm.provider, LlmProvider::Anthropic);
         assert_eq!(config.llm.api_key, Some("sk-ant-test".to_string()));
         assert_eq!(config.llm.model, Some("claude-sonnet-4-6".to_string()));
         assert!(config.repos.is_empty());
@@ -472,12 +640,12 @@ name = "my-repo"
     fn test_build_config_ollama_with_repo() {
         let config = build_config(
             None,
-            "ollama",
+            LlmProvider::Ollama,
             None,
             "llama3.2",
             Some("/tmp/repo".to_string()),
         );
-        assert_eq!(config.llm.provider, "ollama");
+        assert_eq!(config.llm.provider, LlmProvider::Ollama);
         assert_eq!(config.llm.api_key, None);
         assert_eq!(config.llm.model, Some("llama3.2".to_string()));
         assert_eq!(config.repos.len(), 1);
@@ -491,7 +659,7 @@ name = "my-repo"
 
         std::env::set_var("DEVJOURNAL_API_KEY", "env-key");
         let llm = LlmConfig {
-            provider: "claude".to_string(),
+            provider: LlmProvider::Anthropic,
             api_key: Some("config-key".to_string()),
             model: None,
             base_url: None,
@@ -503,6 +671,47 @@ name = "my-repo"
             Some(value) => std::env::set_var("DEVJOURNAL_API_KEY", value),
             None => std::env::remove_var("DEVJOURNAL_API_KEY"),
         }
+    }
+
+    #[test]
+    fn test_inline_llm_model_default_for_openai() {
+        assert_eq!(LlmProvider::OpenAi.default_model(), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_llm_needs_setup_when_api_key_missing_for_hosted_provider() {
+        let llm = LlmConfig {
+            provider: LlmProvider::OpenAi,
+            api_key: None,
+            model: Some("gpt-4o-mini".to_string()),
+            base_url: None,
+            system_prompt: None,
+        };
+
+        assert!(llm_needs_setup(&llm));
+    }
+
+    #[test]
+    fn test_llm_does_not_need_setup_for_ollama_with_model() {
+        let llm = LlmConfig {
+            provider: LlmProvider::Ollama,
+            api_key: None,
+            model: Some("llama3.2".to_string()),
+            base_url: None,
+            system_prompt: None,
+        };
+
+        assert!(!llm_needs_setup(&llm));
+    }
+
+    #[test]
+    fn test_llm_provider_reports_config_string_and_defaults() {
+        assert_eq!(LlmProvider::Anthropic.as_str(), "anthropic");
+        assert_eq!(LlmProvider::OpenAi.as_str(), "openai");
+        assert_eq!(LlmProvider::Ollama.as_str(), "ollama");
+        assert_eq!(LlmProvider::Anthropic.default_model(), "claude-sonnet-4-6");
+        assert_eq!(LlmProvider::OpenAi.default_model(), "gpt-4o-mini");
+        assert_eq!(LlmProvider::Ollama.default_model(), "llama3.2");
     }
 
     #[test]
