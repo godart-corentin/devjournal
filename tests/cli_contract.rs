@@ -173,6 +173,26 @@ name = "{name}"
         )
     }
 
+    fn config_toml_missing_llm_key(&self, repo_name: Option<&str>) -> String {
+        let repo_name = repo_name.unwrap_or(REPO_NAME);
+        format!(
+            r#"[general]
+poll_interval_secs = 1
+author = "{author}"
+
+[llm]
+provider = "anthropic"
+
+[[repos]]
+path = "{path}"
+name = "{name}"
+"#,
+            author = AUTHOR,
+            path = self.git_repo_dir().display(),
+            name = repo_name
+        )
+    }
+
     fn run_git<I, S>(&self, cwd: &Path, args: I) -> TestResult
     where
         I: IntoIterator<Item = S>,
@@ -416,6 +436,37 @@ fn sync_today_summary_log_and_search_emit_stable_json_envelopes() -> TestResult 
     let search_json =
         fixture.command_output(&["search", "Recent", "--repo", REPO_NAME, "--format", "json"])?;
     fixture.assert_json_event_envelope(&search_json, "Recent contract commit");
+
+    Ok(())
+}
+
+#[test]
+fn today_prompts_for_inline_llm_setup_and_then_continues() -> TestResult {
+    let fixture = ContractFixture::new()?;
+    fixture.init_git_repo()?;
+    fixture.write_config(&fixture.config_toml_missing_llm_key(Some(REPO_NAME)))?;
+
+    let assert = fixture
+        .command()
+        .arg("today")
+        .write_stdin("2\nsk-test-inline\n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No LLM configured."))
+        .stdout(predicate::str::contains("Choose a provider:"))
+        .stdout(predicate::str::contains("1. Anthropic"))
+        .stdout(predicate::str::contains("2. OpenAI"))
+        .stdout(predicate::str::contains("Enter your API key:"))
+        .stdout(predicate::str::contains("Select model [gpt-4o-mini]:"))
+        .stdout(predicate::str::contains(
+            "No activity recorded for this date.",
+        ));
+
+    let _ = assert.get_output();
+    let config_contents = std::fs::read_to_string(fixture.config_path())?;
+    assert!(config_contents.contains("provider = \"openai\""));
+    assert!(config_contents.contains("api_key = \"sk-test-inline\""));
+    assert!(config_contents.contains("model = \"gpt-4o-mini\""));
 
     Ok(())
 }

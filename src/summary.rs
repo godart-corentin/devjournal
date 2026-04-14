@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use std::path::PathBuf;
 
-use crate::config::LlmConfig;
+use crate::config::{LlmConfig, LlmProvider};
 use crate::db;
 use crate::llm;
 
@@ -39,7 +39,7 @@ pub fn generate(date: &str, llm_config: &LlmConfig, force: bool) -> Result<Strin
         }
     }
 
-    let api_key = if llm_config.provider == "ollama" {
+    let api_key = if llm_config.provider == LlmProvider::Ollama {
         String::new()
     } else {
         crate::config::api_key(llm_config)
@@ -47,7 +47,7 @@ pub fn generate(date: &str, llm_config: &LlmConfig, force: bool) -> Result<Strin
     };
 
     let backend = llm::make_backend(
-        &llm_config.provider,
+        llm_config.provider.as_str(),
         &api_key,
         llm_config.model.as_deref(),
         llm_config.base_url.as_deref(),
@@ -87,7 +87,7 @@ pub fn generate_range(from: &str, to: &str, llm_config: &LlmConfig, force: bool)
         }
     }
 
-    let api_key = if llm_config.provider == "ollama" {
+    let api_key = if llm_config.provider == LlmProvider::Ollama {
         String::new()
     } else {
         crate::config::api_key(llm_config)
@@ -95,7 +95,7 @@ pub fn generate_range(from: &str, to: &str, llm_config: &LlmConfig, force: bool)
     };
 
     let backend = llm::make_backend(
-        &llm_config.provider,
+        llm_config.provider.as_str(),
         &api_key,
         llm_config.model.as_deref(),
         llm_config.base_url.as_deref(),

@@ -1,6 +1,6 @@
 # devjournal
 
-`devjournal` is a local-first CLI and background daemon that watches your git repositories, stores commit events in a local SQLite database, and turns your recent work into action-oriented markdown summaries using Claude, OpenAI, or Ollama.
+`devjournal` is a local-first CLI and background daemon that watches your git repositories, stores commit events in a local SQLite database, and turns your recent work into action-oriented markdown summaries using Anthropic, OpenAI, or Ollama.
 
 - Keeps your raw activity history on disk in a local SQLite database
 - Watches multiple repositories in the background, but summary commands still work without the daemon running
@@ -18,7 +18,7 @@
 - Scaffolded Rust project with cargo, wired up all module stubs
 - Implemented SQLite database layer with WAL mode for concurrent daemon/CLI access
 - Added libgit2-based git poller with incremental commit detection
-- Wired up Claude and OpenAI LLM backends with a structured prompt builder
+- Wired up Anthropic and OpenAI LLM backends with a structured prompt builder
 - Shipped full CLI with clap: add, remove, status, log, today, summary, start/stop
 ```
 
@@ -119,13 +119,13 @@ The daemon and CLI share the same database directly. There is no separate API se
 
 `devjournal` supports these providers:
 
-- `claude`
+- `anthropic`
 - `openai`
 - `ollama`
 
 Provider defaults from the current CLI:
 
-- Claude default model: `claude-sonnet-4-6`
+- Anthropic default model: `claude-sonnet-4-6`
 - OpenAI default model: `gpt-4o`
 - Ollama default model: `llama3.2`
 
@@ -146,7 +146,7 @@ poll_interval_secs = 60
 author = "Your Name"
 
 [llm]
-provider = "claude"
+provider = "anthropic"
 api_key = "sk-ant-..."
 model = "claude-sonnet-4-6"
 # base_url = "http://localhost:11434"
@@ -163,8 +163,8 @@ Important settings:
 | `general.poll_interval_secs` | `60` | Poll interval in seconds. Minimum effective value is 1. |
 | `general.author` | — | Required. Only commits by this author are recorded, and the match must be exact. |
 | `general.retention_days` | — | Optional automatic retention window for old events. |
-| `llm.provider` | `"claude"` | One of `"claude"`, `"openai"`, or `"ollama"`. |
-| `llm.model` | provider-specific | Claude: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Ollama: `llama3.2`. |
+| `llm.provider` | `"anthropic"` | One of `"anthropic"`, `"openai"`, or `"ollama"`. |
+| `llm.model` | provider-specific | Anthropic: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Ollama: `llama3.2`. |
 | `llm.api_key` | — | `DEVJOURNAL_API_KEY` takes precedence. Not required for Ollama. |
 | `llm.base_url` | `http://localhost:11434` | Ollama only. Change this for remote Ollama instances. |
 | `llm.system_prompt` | — | Optional custom prompt that replaces the default summary instructions. |

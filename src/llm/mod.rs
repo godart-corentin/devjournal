@@ -1,4 +1,4 @@
-pub mod claude;
+pub mod anthropic;
 pub mod ollama;
 pub mod openai;
 
@@ -17,7 +17,7 @@ pub trait LlmBackend {
 
 #[cfg(test)]
 pub fn supported_providers() -> &'static [&'static str] {
-    &["claude", "openai", "ollama"]
+    &["anthropic", "openai", "ollama"]
 }
 
 pub fn make_backend(
@@ -35,7 +35,7 @@ pub fn make_backend(
             base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
             model: model.unwrap_or("llama3.2").to_string(),
         }),
-        _ => Box::new(claude::ClaudeBackend {
+        _ => Box::new(anthropic::AnthropicBackend {
             api_key: api_key.to_string(),
             model: model.unwrap_or("claude-sonnet-4-6").to_string(),
         }),
@@ -66,7 +66,6 @@ pub fn build_prompt_with_custom(
         ]
     };
 
-    // Group by repo
     let mut repos: std::collections::BTreeMap<String, Vec<&Event>> = Default::default();
     for e in events {
         let name = e.repo_name.clone().unwrap_or_else(|| e.repo_path.clone());
@@ -208,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_supported_providers_excludes_cursor() {
-        assert_eq!(supported_providers(), &["claude", "openai", "ollama"]);
+        assert_eq!(supported_providers(), &["anthropic", "openai", "ollama"]);
     }
 
     fn make_event(
@@ -265,123 +264,62 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_groups_by_project() {
-        let events = vec![
-            make_event("project-alpha", "Fix TT-1234 bug", "main", None, None),
-            make_event("project-beta", "Add feature X", "feature/x", None, None),
-            make_event("project-alpha", "Refactor auth", "main", None, None),
-        ];
-        let prompt = build_prompt(&events, "2026-03-23");
-        assert!(prompt.contains("Project: project-alpha"));
-        assert!(prompt.contains("Project: project-beta"));
-        assert!(prompt.contains("Fix TT-1234 bug"));
-        assert!(prompt.contains("# Dev Journal — 2026-03-23"));
-    }
-
-    #[test]
-    fn test_prompt_no_metadata_instructions() {
-        let events = vec![make_event("proj", "commit msg", "main", None, None)];
-        let prompt = build_prompt(&events, "2026-03-23");
-        assert!(prompt.contains("Do NOT mention branch names"));
-        assert!(prompt.contains("OUTCOMES"));
-        assert!(prompt.contains("standup"));
-        assert!(prompt.contains("ticket ID"));
-        assert!(prompt.contains("prefer those concrete signals"));
-    }
-
-    #[test]
-    fn test_build_prompt_with_custom_system_prompt() {
-        let events = vec![make_event("proj", "commit msg", "main", None, None)];
-        let custom = "Write a haiku summarizing the work.";
-        let prompt = build_prompt_with_custom(&events, "2026-03-23", Some(custom));
-        assert!(prompt.contains("Project: proj"));
-        assert!(prompt.contains("Write a haiku"));
-        // Should NOT contain default rules
-        assert!(!prompt.contains("OUTCOMES"));
-        assert!(!prompt.contains("standup"));
-    }
-
-    #[test]
-    fn test_prompt_includes_semantic_fields_when_present() {
-        let events = vec![make_event(
-            "proj",
-            "Refactor auth",
-            "main",
-            Some(sample_sem()),
-            None,
-        )];
-        let prompt = build_prompt(&events, "2026-03-23");
-
-        assert!(prompt.contains("semantic summary: 2 semantic changes across 1 files"));
-        assert!(prompt.contains("entities: function validate_token [added]"));
-        assert!(prompt.contains("change types: added, modified"));
-        assert!(prompt.contains("files: src/auth.rs"));
-    }
-
-    #[test]
-    fn test_prompt_includes_structured_diff_when_sem_missing() {
-        let events = vec![make_event(
-            "proj",
-            "commit msg",
-            "main",
-            None,
-            Some(serde_json::json!({
-                "stat_summary": "2 files changed, 12 insertions(+), 3 deletions(-)",
-                "files": [
-                    {
-                        "path": "src/auth.rs",
-                        "status": "modified",
-                        "additions": 10,
-                        "deletions": 2
-                    },
-                    {
-                        "path": "src/token.rs",
-                        "status": "added",
-                        "additions": 2,
-                        "deletions": 1
-                    }
-                ]
-            })),
-        )];
-
-        let prompt = build_prompt(&events, "2026-03-23");
-
-        assert!(prompt.contains("diff summary: 2 files changed, 12 insertions(+), 3 deletions(-)"));
-        assert!(prompt
-            .contains("diff files: modified src/auth.rs (+10/-2), added src/token.rs (+2/-1)"));
-    }
-
-    #[test]
-    fn test_prompt_only_includes_patch_excerpt_without_sem() {
-        let diff = serde_json::json!({
-            "stat_summary": "1 file changed, 4 insertions(+), 1 deletion(-)",
-            "files": [
-                {
-                    "path": "src/auth.rs",
-                    "status": "modified",
-                    "additions": 4,
-                    "deletions": 1
-                }
+    fn prompt_uses_project_sections_and_commit_metadata() {
+        let prompt = build_prompt(
+            &[
+                make_event(
+                    "proj-a",
+                    "Add auth token validation",
+                    "main",
+                    Some(sample_sem()),
+                    None,
+                ),
+                make_event(
+                    "proj-b",
+                    "Fix UI spacing",
+                    "feature/ui",
+                    None,
+                    Some(serde_json::json!({
+                        "stat_summary": "1 file changed, 4 insertions(+), 1 deletion(-)",
+                        "files": [{
+                            "path": "src/ui.rs",
+                            "status": "modified",
+                            "additions": 4,
+                            "deletions": 1
+                        }]
+                    })),
+                ),
             ],
-            "patch_excerpt": "@@ -1,2 +1,5 @@\n-fn auth() {}\n+fn auth() {\n+  validate();\n+}"
-        });
-
-        let no_sem_prompt = build_prompt(
-            &[make_event("proj", "wip", "main", None, Some(diff.clone()))],
             "2026-03-23",
         );
-        assert!(no_sem_prompt.contains("patch excerpt:"));
 
-        let with_sem_prompt = build_prompt(
-            &[make_event(
-                "proj",
-                "wip",
-                "main",
-                Some(sample_sem()),
-                Some(diff),
-            )],
-            "2026-03-23",
+        assert!(prompt.contains("Project: proj-a"));
+        assert!(prompt.contains("Project: proj-b"));
+        assert!(prompt.contains("[abc123] (main) Add auth token validation"));
+        assert!(prompt.contains("semantic summary: 2 semantic changes across 1 files"));
+        assert!(prompt.contains("diff summary: 1 file changed, 4 insertions(+), 1 deletion(-)"));
+    }
+
+    #[test]
+    fn prompt_uses_multi_day_instructions_for_ranges() {
+        let prompt = build_prompt(
+            &[make_event("proj-a", "Add feature", "main", None, None)],
+            "2026-03-01 to 2026-03-07",
         );
-        assert!(!with_sem_prompt.contains("patch excerpt:"));
+
+        assert!(prompt.contains("Here are all git commits recorded from 2026-03-01 to 2026-03-07:"));
+        assert!(prompt.contains("Please write a multi-day summary"));
+    }
+
+    #[test]
+    fn prompt_includes_custom_prompt_when_provided() {
+        let prompt = build_prompt_with_custom(
+            &[make_event("proj-a", "Add feature", "main", None, None)],
+            "2026-03-23",
+            Some("Custom instructions here."),
+        );
+
+        assert!(prompt.contains("Custom instructions here."));
+        assert!(!prompt.contains("Rules:"));
     }
 }

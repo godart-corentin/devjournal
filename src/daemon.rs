@@ -685,7 +685,7 @@ mod tests {
                 retention_days: None,
             },
             llm: config::LlmConfig {
-                provider: "claude".to_string(),
+                provider: config::LlmProvider::Anthropic,
                 api_key: None,
                 model: None,
                 base_url: None,

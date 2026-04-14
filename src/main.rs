@@ -174,6 +174,12 @@ fn print_events_json(events: &[db::Event]) -> Result<()> {
     Ok(())
 }
 
+fn prepare_llm_config_for_summary() -> Result<config::Config> {
+    let mut config = config::load()?;
+    config::ensure_llm_configured_interactive(&mut config)?;
+    Ok(config)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -200,7 +206,7 @@ fn main() -> Result<()> {
                     print_events_json(&events)?;
                 }
                 Format::Markdown => {
-                    let config = config::load()?;
+                    let config = prepare_llm_config_for_summary()?;
                     let text = summary::generate(&date, &config.llm, force)?;
                     println!("{}", text);
                 }
@@ -226,7 +232,7 @@ fn main() -> Result<()> {
                         print_events_json(&events)?;
                     }
                     Format::Markdown => {
-                        let config = config::load()?;
+                        let config = prepare_llm_config_for_summary()?;
                         let text = summary::generate_range(&from, &to, &config.llm, force)?;
                         println!("{}", text);
                     }
@@ -244,7 +250,7 @@ fn main() -> Result<()> {
                         print_events_json(&events)?;
                     }
                     Format::Markdown => {
-                        let config = config::load()?;
+                        let config = prepare_llm_config_for_summary()?;
                         let text = summary::generate(&date, &config.llm, force)?;
                         println!("{}", text);
                     }
@@ -265,7 +271,7 @@ fn main() -> Result<()> {
                     print_events_json(&events)?;
                 }
                 Format::Markdown => {
-                    let config = config::load()?;
+                    let config = prepare_llm_config_for_summary()?;
                     let text = summary::generate_range(&from, &to, &config.llm, force)?;
                     println!("{}", text);
                 }
@@ -285,7 +291,7 @@ fn main() -> Result<()> {
                     print_events_json(&events)?;
                 }
                 Format::Markdown => {
-                    let config = config::load()?;
+                    let config = prepare_llm_config_for_summary()?;
                     let text = summary::generate_range(&from, &to, &config.llm, force)?;
                     println!("{}", text);
                 }
@@ -366,7 +372,7 @@ fn main() -> Result<()> {
 
                     // 3. LLM API key
                     print!("LLM API key... ");
-                    if cfg.llm.provider == "ollama" {
+                    if cfg.llm.provider == config::LlmProvider::Ollama {
                         println!("SKIPPED ({} does not need a key)", cfg.llm.provider);
                     } else if config::api_key(&cfg.llm).is_some() {
                         println!("OK");
