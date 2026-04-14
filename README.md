@@ -1,6 +1,6 @@
 # devjournal
 
-`devjournal` is a local-first CLI and background daemon that watches your git repositories, stores commit events in a local SQLite database, and turns your recent work into action-oriented markdown summaries using Claude, OpenAI, Ollama, or Cursor.
+`devjournal` is a local-first CLI and background daemon that watches your git repositories, stores commit events in a local SQLite database, and turns your recent work into action-oriented markdown summaries using Claude, OpenAI, or Ollama.
 
 - Keeps your raw activity history on disk in a local SQLite database
 - Watches multiple repositories in the background, but summary commands still work without the daemon running
@@ -122,14 +122,12 @@ The daemon and CLI share the same database directly. There is no separate API se
 - `claude`
 - `openai`
 - `ollama`
-- `cursor`
 
 Provider defaults from the current CLI:
 
 - Claude default model: `claude-sonnet-4-6`
 - OpenAI default model: `gpt-4o`
 - Ollama default model: `llama3.2`
-- Cursor default model: `gpt-5.4-mini`
 
 ### Platform notes
 
@@ -165,9 +163,9 @@ Important settings:
 | `general.poll_interval_secs` | `60` | Poll interval in seconds. Minimum effective value is 1. |
 | `general.author` | — | Required. Only commits by this author are recorded, and the match must be exact. |
 | `general.retention_days` | — | Optional automatic retention window for old events. |
-| `llm.provider` | `"claude"` | One of `"claude"`, `"openai"`, `"ollama"`, or `"cursor"`. |
-| `llm.model` | provider-specific | Claude: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Ollama: `llama3.2`. Cursor: `gpt-5.4-mini`. |
-| `llm.api_key` | — | `DEVJOURNAL_API_KEY` takes precedence. Not required for Ollama or Cursor. |
+| `llm.provider` | `"claude"` | One of `"claude"`, `"openai"`, or `"ollama"`. |
+| `llm.model` | provider-specific | Claude: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Ollama: `llama3.2`. |
+| `llm.api_key` | — | `DEVJOURNAL_API_KEY` takes precedence. Not required for Ollama. |
 | `llm.base_url` | `http://localhost:11434` | Ollama only. Change this for remote Ollama instances. |
 | `llm.system_prompt` | — | Optional custom prompt that replaces the default summary instructions. |
 | `repos[].name` | folder name | Defaults to the repository folder name when omitted. |
@@ -258,9 +256,6 @@ Add your git author name under `[general]` as `author = "Your Name"`. It must ma
 
 **Ollama: "Failed to call Ollama API"?**  
 Start Ollama with `ollama serve`, then confirm the model is available with `ollama list`. If Ollama runs on another machine, set `base_url` accordingly.
-
-**Cursor: "cursor agent not found"?**  
-Install Cursor from [cursor.com](https://cursor.com) and make sure the `cursor` binary is on your `PATH`. Verify with `cursor --version`.
 
 **Warnings about `sem` extraction?**  
 `devjournal` still records commits and generates summaries without `sem`. Install or repair `sem`, then re-run `devjournal sync` to backfill richer semantic metadata.

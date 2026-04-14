@@ -1,5 +1,4 @@
 pub mod claude;
-pub mod cursor;
 pub mod ollama;
 pub mod openai;
 
@@ -16,6 +15,11 @@ pub trait LlmBackend {
     ) -> Result<String>;
 }
 
+#[cfg(test)]
+pub fn supported_providers() -> &'static [&'static str] {
+    &["claude", "openai", "ollama"]
+}
+
 pub fn make_backend(
     provider: &str,
     api_key: &str,
@@ -30,9 +34,6 @@ pub fn make_backend(
         "ollama" => Box::new(ollama::OllamaBackend {
             base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
             model: model.unwrap_or("llama3.2").to_string(),
-        }),
-        "cursor" => Box::new(cursor::CursorBackend {
-            model: model.unwrap_or(cursor::DEFAULT_MODEL).to_string(),
         }),
         _ => Box::new(claude::ClaudeBackend {
             api_key: api_key.to_string(),
@@ -204,6 +205,11 @@ mod tests {
     use super::*;
     use crate::db::Event;
     use crate::sem::{SemEntity, SemMetadata};
+
+    #[test]
+    fn test_supported_providers_excludes_cursor() {
+        assert_eq!(supported_providers(), &["claude", "openai", "ollama"]);
+    }
 
     fn make_event(
         repo_name: &str,
