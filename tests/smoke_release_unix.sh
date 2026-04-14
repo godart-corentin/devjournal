@@ -106,8 +106,8 @@ poll_interval_secs = 1
 author = "Smoke Tester"
 
 [llm]
-provider = "cursor"
-model = "gpt-5.4-mini"
+provider = "ollama"
+model = "llama3.2"
 
 [[repos]]
 path = "$REPO_DIR"

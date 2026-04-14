@@ -275,17 +275,15 @@ pub fn init() -> Result<()> {
     println!("  1) claude (default)");
     println!("  2) openai");
     println!("  3) ollama");
-    println!("  4) cursor");
     let provider_input = prompt_line("Choose [1]: ");
     let provider = match provider_input.as_str() {
         "2" => "openai",
         "3" => "ollama",
-        "4" => "cursor",
         _ => "claude",
     };
 
-    // API key (not for ollama or cursor)
-    let api_key = if provider != "ollama" && provider != "cursor" {
+    // API key (not for ollama)
+    let api_key = if provider != "ollama" {
         loop {
             let key = prompt_line("API key: ");
             if !key.is_empty() {
@@ -320,10 +318,6 @@ pub fn init() -> Result<()> {
                 "2" => "gpt-5.4",
                 _ => "gpt-4o",
             }
-        }
-        "cursor" => {
-            println!("\nModel set to gpt-5.4-mini (default for cursor).");
-            "gpt-5.4-mini"
         }
         _ => {
             // ollama
@@ -488,20 +482,6 @@ name = "my-repo"
         assert_eq!(config.llm.model, Some("llama3.2".to_string()));
         assert_eq!(config.repos.len(), 1);
         assert_eq!(config.repos[0].path, "/tmp/repo");
-    }
-
-    #[test]
-    fn test_build_config_cursor_no_api_key() {
-        let config = build_config(
-            Some("Dev".to_string()),
-            "cursor",
-            None,
-            "gpt-5.4-mini",
-            None,
-        );
-        assert_eq!(config.llm.provider, "cursor");
-        assert_eq!(config.llm.api_key, None);
-        assert_eq!(config.llm.model, Some("gpt-5.4-mini".to_string()));
     }
 
     #[test]

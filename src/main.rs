@@ -366,7 +366,7 @@ fn main() -> Result<()> {
 
                     // 3. LLM API key
                     print!("LLM API key... ");
-                    if cfg.llm.provider == "ollama" || cfg.llm.provider == "cursor" {
+                    if cfg.llm.provider == "ollama" {
                         println!("SKIPPED ({} does not need a key)", cfg.llm.provider);
                     } else if config::api_key(&cfg.llm).is_some() {
                         println!("OK");
@@ -378,22 +378,7 @@ fn main() -> Result<()> {
                         issues += 1;
                     }
 
-                    // 3b. Cursor binary (only when provider is cursor)
-                    if cfg.llm.provider == "cursor" {
-                        print!("Cursor CLI... ");
-                        match std::process::Command::new("cursor")
-                            .arg("--version")
-                            .output()
-                        {
-                            Ok(out) if out.status.success() => println!("OK"),
-                            _ => {
-                                println!("NOT FOUND — install Cursor or ensure it is on PATH");
-                                issues += 1;
-                            }
-                        }
-                    }
-
-                    // 3c. sem CLI
+                    // 3b. sem CLI
                     print!("sem CLI... ");
                     let sem_probe = sem::probe();
                     match sem_probe.status {
