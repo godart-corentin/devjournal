@@ -546,6 +546,6 @@ If you believe you found a security issue, use the private reporting guidance in
 
 ## Maintainers
 
-Release flow, packaging details, and versioning checks live in `RELEASING.md`.
+Release flow, packaging details, and versioning checks live in [RELEASING.md](RELEASING.md).
 
-The in-repo Homebrew formula remains the canonical formula source for releases, while maintainer-specific workflow details stay out of the user-facing README.
+The in-repo [Formula/devjournal.rb](Formula/devjournal.rb) remains the canonical formula source for releases, while maintainer-specific workflow details stay out of the user-facing README.

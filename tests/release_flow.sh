@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 SCRIPT="$ROOT_DIR/scripts/release.sh"
+. "$ROOT_DIR/scripts/release_text.sh"
 
 fail() {
     echo "FAIL: $1" >&2
@@ -79,9 +80,21 @@ test_prep_updates_repo_metadata() {
     "$SCRIPT" prep "$target_version" --repo "$fixture_dir"
 
     assert_contains "version = \"$target_version\"" "$fixture_dir/Cargo.toml"
-    assert_contains 'Release flow, packaging details, and versioning checks live in [RELEASING.md](RELEASING.md).' "$fixture_dir/README.md"
-    assert_contains 'Formula/devjournal.rb' "$fixture_dir/README.md"
-    assert_not_contains 'future `homebrew-core` submission' "$fixture_dir/README.md"
+    assert_contains "$README_RELEASING_GUIDE_SENTENCE" "$fixture_dir/README.md"
+    assert_contains "$README_FORMULA_SOURCE_SENTENCE" "$fixture_dir/README.md"
+    assert_not_contains "$README_OUTDATED_TAP_WORDING" "$fixture_dir/README.md"
+}
+
+test_prep_rejects_stale_release_docs() {
+    fixture_dir=$(make_fixture)
+    target_version=$(next_patch_version "$(cargo_version "$fixture_dir")")
+    perl -0pi -e 's/\[RELEASING\.md\]\(RELEASING\.md\)/`RELEASING.md`/' "$fixture_dir/README.md"
+
+    if "$SCRIPT" prep "$target_version" --repo "$fixture_dir" >/tmp/release-prep-docs.out 2>&1; then
+        fail "prep should reject stale README release guidance"
+    fi
+
+    assert_contains 'README is missing the maintainers link to RELEASING.md' /tmp/release-prep-docs.out
 }
 
 test_verify_rejects_version_drift() {
@@ -168,6 +181,7 @@ test_finalize_writes_formula_from_published_archive() {
 
 main() {
     test_prep_updates_repo_metadata
+    test_prep_rejects_stale_release_docs
     test_verify_rejects_version_drift
     test_verify_rejects_roadmap_language
     test_verify_accepts_user_facing_readme

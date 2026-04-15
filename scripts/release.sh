@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+. "$SCRIPT_DIR/release_text.sh"
+
 REPO_SLUG="godart-corentin/devjournal"
 FORMULA_PATH="Formula/devjournal.rb"
 README_PATH="README.md"
@@ -149,16 +152,16 @@ verify_readme_text() {
     readme="$repo_dir/$README_PATH"
     require_file "$readme"
 
-    grep -F '## Maintainers' "$readme" >/dev/null 2>&1 \
+    grep -F "$README_MAINTAINERS_HEADING" "$readme" >/dev/null 2>&1 \
         || die "README is missing the maintainers handoff section"
-    grep -F '[RELEASING.md](RELEASING.md)' "$readme" >/dev/null 2>&1 \
+    grep -F "$README_RELEASING_GUIDE_SENTENCE" "$readme" >/dev/null 2>&1 \
         || die "README is missing the maintainers link to RELEASING.md"
-    grep -F 'canonical formula source for releases' "$readme" >/dev/null 2>&1 \
+    grep -F "$README_FORMULA_SOURCE_SENTENCE" "$readme" >/dev/null 2>&1 \
         || die "README is missing the canonical formula-source wording"
-    if grep -F 'future `homebrew-core` submission' "$readme" >/dev/null 2>&1 ||
-        grep -F '## Homebrew release flow' "$readme" >/dev/null 2>&1 ||
-        grep -F '## Homebrew roadmap' "$readme" >/dev/null 2>&1 ||
-        grep -F 'future work' "$readme" >/dev/null 2>&1; then
+    if grep -F "$README_OUTDATED_TAP_WORDING" "$readme" >/dev/null 2>&1 ||
+        grep -F "$README_OUTDATED_RELEASE_HEADING" "$readme" >/dev/null 2>&1 ||
+        grep -F "$README_OUTDATED_ROADMAP_HEADING" "$readme" >/dev/null 2>&1 ||
+        grep -F "$README_OUTDATED_FUTURE_WORK" "$readme" >/dev/null 2>&1; then
         die "README still contains outdated release-roadmap wording"
     fi
 }
@@ -220,6 +223,8 @@ run_prep() {
 
     require_file "$repo_dir/$CARGO_PATH"
     require_file "$repo_dir/$README_PATH"
+    verify_readme_text "$repo_dir"
+    verify_releasing_guide "$repo_dir"
 
     current_version=$(cargo_version "$repo_dir")
     [ -n "$current_version" ] || die "Unable to read Cargo.toml version"
