@@ -579,9 +579,9 @@ fn today_prompts_for_inline_llm_setup_and_then_continues() -> TestResult {
         .stderr(predicate::str::contains(format!(
             "Syncing activity for {today}"
         )))
-        .stderr(predicate::str::contains(format!(
-            "Syncing fixture-repo\n✓ fixture-repo\n\nNo LLM configured."
-        )))
+        .stderr(predicate::str::contains(
+            "Syncing fixture-repo\n✓ fixture-repo\n\nNo LLM configured.",
+        ))
         .stderr(predicate::str::contains(format!(
             "Syncing activity for {today}\nSyncing fixture-repo"
         )))
