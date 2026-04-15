@@ -288,6 +288,9 @@ fn cli_help_surface_stays_stable() -> TestResult {
         .arg("--help")
         .assert()
         .success()
+        .stdout(predicate::str::contains(
+            "Add a git repository to watch (creates config if needed)",
+        ))
         .stdout(predicate::str::contains("start"))
         .stdout(predicate::str::contains("today"))
         .stdout(predicate::str::contains("summary"))
@@ -311,6 +314,13 @@ fn cli_help_surface_stays_stable() -> TestResult {
         .stdout(predicate::str::contains("--repo"))
         .stdout(predicate::str::contains("--limit"))
         .stdout(predicate::str::contains("--format"));
+
+    fixture
+        .command()
+        .args(["today", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Sync today's commits"));
 
     Ok(())
 }
@@ -390,6 +400,33 @@ fn config_add_list_and_remove_round_trip_with_isolated_roots() -> TestResult {
 }
 
 #[test]
+fn add_bootstraps_config_without_inline_llm_setup() -> TestResult {
+    let fixture = ContractFixture::new()?;
+    fixture.init_git_repo()?;
+
+    fixture
+        .command()
+        .args([
+            "add",
+            fixture
+                .git_repo_dir()
+                .to_str()
+                .expect("repo path is valid UTF-8"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Now tracking"))
+        .stdout(predicate::str::contains("No LLM configured.").not());
+
+    let config_contents = std::fs::read_to_string(fixture.config_path())?;
+    assert!(config_contents.contains("[[repos]]"));
+    assert!(config_contents.contains(&fixture.git_repo_dir().to_string_lossy().to_string()));
+    assert!(!config_contents.contains("api_key = "));
+
+    Ok(())
+}
+
+#[test]
 fn sync_today_summary_log_and_search_emit_stable_json_envelopes() -> TestResult {
     let fixture = ContractFixture::new()?;
     fixture.init_git_repo()?;
@@ -416,8 +453,11 @@ fn sync_today_summary_log_and_search_emit_stable_json_envelopes() -> TestResult 
         .arg("sync")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Syncing fixture-repo..."))
-        .stdout(predicate::str::contains("2 commit(s) added"));
+        .stderr(predicate::str::contains("Syncing fixture-repo"))
+        .stderr(predicate::str::contains("✓ Synced fixture-repo"))
+        .stderr(predicate::str::contains("  added commits: 2"))
+        .stderr(predicate::str::contains("  already there: 0"))
+        .stderr(predicate::str::contains("  total processed: 2"));
 
     assert!(
         fixture.data_path().exists(),
@@ -441,10 +481,91 @@ fn sync_today_summary_log_and_search_emit_stable_json_envelopes() -> TestResult 
 }
 
 #[test]
+fn sync_reports_existing_commits_on_repeat_runs() -> TestResult {
+    let fixture = ContractFixture::new()?;
+    fixture.init_git_repo()?;
+
+    let recent_date = fixture.today_date();
+
+    fixture.commit_file(
+        "README.md",
+        "# fixture repo\n",
+        "First contract commit",
+        &recent_date,
+    )?;
+    fixture.commit_file(
+        "notes.txt",
+        "recent fixture notes\n",
+        "Second contract commit",
+        &recent_date,
+    )?;
+    fixture.write_config(&fixture.config_toml(Some(REPO_NAME)))?;
+
+    fixture.command().arg("sync").assert().success();
+
+    fixture
+        .command()
+        .arg("sync")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Syncing fixture-repo"))
+        .stderr(predicate::str::contains("✓ Synced fixture-repo"))
+        .stderr(predicate::str::contains("  added commits: 0"))
+        .stderr(predicate::str::contains("  already there: 2"))
+        .stderr(predicate::str::contains("  total processed: 2"));
+
+    Ok(())
+}
+
+#[test]
+fn summary_commands_scope_sync_before_json_output() -> TestResult {
+    let fixture = ContractFixture::new()?;
+    fixture.init_git_repo()?;
+
+    let recent_date = fixture.today_date();
+    let old_date = fixture.date_days_ago(10);
+
+    fixture.commit_file("README.md", "# old\n", "Old contract commit", &old_date)?;
+    fixture.commit_file(
+        "notes.txt",
+        "recent\n",
+        "Recent contract commit",
+        &recent_date,
+    )?;
+    fixture.write_config(&fixture.config_toml(Some(REPO_NAME)))?;
+
+    let today_json = fixture.command_output(&["today", "--format", "json"])?;
+    fixture.assert_json_event_envelope(&today_json, "Recent contract commit");
+
+    let old_log_before_full_sync =
+        fixture.command_output(&["log", &old_date, "--format", "json"])?;
+    let old_events_before_full_sync: Value = serde_json::from_str(&old_log_before_full_sync)?;
+    assert_eq!(
+        old_events_before_full_sync
+            .as_array()
+            .map(std::vec::Vec::len),
+        Some(0),
+        "scoped summary sync should not backfill commits outside the requested window"
+    );
+
+    let old_summary_json = fixture.command_output(&["summary", &old_date, "--format", "json"])?;
+    fixture.assert_json_event_envelope(&old_summary_json, "Old contract commit");
+
+    fixture.command().arg("sync").assert().success();
+
+    let old_log_after_full_sync =
+        fixture.command_output(&["log", &old_date, "--format", "json"])?;
+    fixture.assert_json_event_envelope(&old_log_after_full_sync, "Old contract commit");
+
+    Ok(())
+}
+
+#[test]
 fn today_prompts_for_inline_llm_setup_and_then_continues() -> TestResult {
     let fixture = ContractFixture::new()?;
     fixture.init_git_repo()?;
     fixture.write_config(&fixture.config_toml_missing_llm_key(Some(REPO_NAME)))?;
+    let today = fixture.today_date();
 
     let assert = fixture
         .command()
@@ -452,15 +573,30 @@ fn today_prompts_for_inline_llm_setup_and_then_continues() -> TestResult {
         .write_stdin("2\nsk-test-inline\n\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("No LLM configured."))
-        .stdout(predicate::str::contains("Choose a provider:"))
-        .stdout(predicate::str::contains("1. Anthropic"))
-        .stdout(predicate::str::contains("2. OpenAI"))
-        .stdout(predicate::str::contains("Enter your API key:"))
-        .stdout(predicate::str::contains("Select model [gpt-4o-mini]:"))
         .stdout(predicate::str::contains(
             "No activity recorded for this date.",
-        ));
+        ))
+        .stderr(predicate::str::contains(format!(
+            "Syncing activity for {today}"
+        )))
+        .stderr(predicate::str::contains(format!(
+            "Syncing fixture-repo\n✓ fixture-repo\n\nNo LLM configured."
+        )))
+        .stderr(predicate::str::contains(format!(
+            "Syncing activity for {today}\nSyncing fixture-repo"
+        )))
+        .stderr(predicate::str::contains("✓ fixture-repo"))
+        .stderr(predicate::str::contains(
+            "No LLM configured.\nChoose a provider:",
+        ))
+        .stderr(predicate::str::contains(
+            "Choose a provider:\n1. Anthropic\n2. OpenAI\n3. Local model (Ollama)\n> ",
+        ))
+        .stderr(predicate::str::contains("Enter your API key:\n> "))
+        .stderr(predicate::str::contains("Select model [gpt-4o-mini]:\n> "))
+        .stderr(predicate::str::contains(format!(
+            "Generating summary for {today}"
+        )));
 
     let _ = assert.get_output();
     let config_contents = std::fs::read_to_string(fixture.config_path())?;

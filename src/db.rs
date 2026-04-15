@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-#[cfg(test)]
 use rusqlite::OptionalExtension;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -117,8 +116,32 @@ pub struct Event {
     pub data: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InsertEventOutcome {
+    Inserted,
+    AlreadyExisted,
+}
+
 pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
+    insert_event_with_outcome(conn, event).map(|_| ())
+}
+
+pub(crate) fn insert_event_with_outcome(
+    conn: &Connection,
+    event: &Event,
+) -> Result<InsertEventOutcome> {
     let commit_hash = event.data["hash"].as_str().map(|s| s.to_string());
+    let existed = match commit_hash.as_deref() {
+        Some(hash) => conn
+            .query_row(
+                "SELECT 1 FROM events WHERE repo_path = ?1 AND commit_hash = ?2",
+                params![event.repo_path.as_str(), hash],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some(),
+        None => false,
+    };
     let data = merged_event_data(
         conn,
         event.repo_path.as_str(),
@@ -142,7 +165,11 @@ pub fn insert_event(conn: &Connection, event: &Event) -> Result<()> {
             serde_json::to_string(&data)?
         ],
     )?;
-    Ok(())
+    Ok(if existed {
+        InsertEventOutcome::AlreadyExisted
+    } else {
+        InsertEventOutcome::Inserted
+    })
 }
 
 fn merged_event_data(

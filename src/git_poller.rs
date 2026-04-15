@@ -8,10 +8,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Once;
 
 use crate::config::RepoConfig;
-use crate::db::{self, Event};
+use crate::db::{self, Event, InsertEventOutcome};
 use crate::sem::{CliSemExtractor, SemExtractor, SemMetadata};
 
 static SEM_UNAVAILABLE_WARNING: Once = Once::new();
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncStats {
+    pub added: usize,
+    pub already_there: usize,
+    pub total_processed: usize,
+}
 
 fn open_repo(path: &str) -> Result<Repository> {
     // Disable ownership check to support repos in directories owned by a different
@@ -31,15 +38,70 @@ pub fn sync_repo(
     repo_config: &RepoConfig,
     conn: &Connection,
     author_filter: Option<&str>,
-) -> Result<usize> {
+) -> Result<SyncStats> {
     let extractor = CliSemExtractor;
     sync_repo_with_extractor(repo_config, conn, author_filter, &extractor)
+}
+
+pub fn sync_repo_range(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+    from: &str,
+    to: &str,
+) -> Result<usize> {
+    let extractor = CliSemExtractor;
+    sync_repo_range_with_extractor(repo_config, conn, author_filter, from, to, &extractor)
 }
 
 fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
     repo_config: &RepoConfig,
     conn: &Connection,
     author_filter: Option<&str>,
+    extractor: &E,
+) -> Result<SyncStats> {
+    let repo = open_repo(&repo_config.path)?;
+
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(SyncStats::default()),
+    };
+
+    let head_commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
+    let head_hash = head_commit.id().to_string();
+    let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+    let reachable_hashes = collect_reachable_hashes(&repo, &head_hash)?;
+
+    db::prune_unreachable_commit_events(conn, &repo_config.path, &reachable_hashes)?;
+
+    let all_commits = collect_new_commits(&repo, &head_hash, None)?;
+
+    let now = Local::now().to_rfc3339();
+    let mut stats = SyncStats::default();
+    for commit_info in all_commits {
+        if let Some(author) = author_filter {
+            if commit_info.author != author {
+                continue;
+            }
+        }
+        stats.total_processed += 1;
+        let event = build_commit_event(repo_config, &branch_name, &commit_info, extractor);
+        match db::insert_event_with_outcome(conn, &event)? {
+            InsertEventOutcome::Inserted => stats.added += 1,
+            InsertEventOutcome::AlreadyExisted => stats.already_there += 1,
+        }
+    }
+
+    db::update_poll_state(conn, &repo_config.path, &head_hash, &now)?;
+    Ok(stats)
+}
+
+fn sync_repo_range_with_extractor<E: SemExtractor + ?Sized>(
+    repo_config: &RepoConfig,
+    conn: &Connection,
+    author_filter: Option<&str>,
+    from: &str,
+    to: &str,
     extractor: &E,
 ) -> Result<usize> {
     let repo = open_repo(&repo_config.path)?;
@@ -56,11 +118,10 @@ fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
 
     db::prune_unreachable_commit_events(conn, &repo_config.path, &reachable_hashes)?;
 
-    let all_commits = collect_new_commits(&repo, &head_hash, None)?;
+    let ranged_commits = collect_commits_in_range(&repo, &head_hash, from, to)?;
 
-    let now = Local::now().to_rfc3339();
     let mut count = 0;
-    for commit_info in all_commits {
+    for commit_info in ranged_commits {
         if let Some(author) = author_filter {
             if commit_info.author != author {
                 continue;
@@ -71,7 +132,6 @@ fn sync_repo_with_extractor<E: SemExtractor + ?Sized>(
         db::insert_event(conn, &event)?;
     }
 
-    db::update_poll_state(conn, &repo_config.path, &head_hash, &now)?;
     Ok(count)
 }
 
@@ -202,6 +262,64 @@ fn collect_new_commits(
             .map(|dt| dt.with_timezone(&Local))
             .unwrap_or_else(Local::now)
             .to_rfc3339();
+
+        let diff = diff_context(repo, &commit, &message);
+        let files_changed = diff.files.len();
+        let insertions = diff.files.iter().map(|file| file.additions).sum();
+        let deletions = diff.files.iter().map(|file| file.deletions).sum();
+
+        commits.push(CommitInfo {
+            hash: oid.to_string()[..8].to_string(),
+            full_hash: oid.to_string(),
+            author,
+            message,
+            timestamp,
+            files_changed,
+            insertions,
+            deletions,
+            diff,
+        });
+    }
+
+    Ok(commits)
+}
+
+fn collect_commits_in_range(
+    repo: &Repository,
+    head_hash: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<CommitInfo>> {
+    anyhow::ensure!(from <= to, "Invalid range: {from} is after {to}");
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.set_sorting(Sort::TIME)?;
+    revwalk.push(repo.revparse_single(head_hash)?.id())?;
+
+    let mut commits = Vec::new();
+
+    for oid in revwalk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+
+        if commit.parent_count() > 1 {
+            continue;
+        }
+
+        let author = commit.author().name().unwrap_or("Unknown").to_string();
+        let message = commit.summary().unwrap_or("").to_string();
+        let timestamp = chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(Local::now)
+            .to_rfc3339();
+        let commit_date = &timestamp[..10];
+
+        if commit_date > to {
+            continue;
+        }
+        if commit_date < from {
+            continue;
+        }
 
         let diff = diff_context(repo, &commit, &message);
         let files_changed = diff.files.len();
@@ -555,6 +673,30 @@ mod tests {
             .unwrap();
     }
 
+    fn commit_in_repo_at(repo: &Repository, message: &str, date: &str) {
+        let timestamp = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let time = git2::Time::new(timestamp, 0);
+        let sig = Signature::new("Test User", "test@test.com", &time).unwrap();
+        let mut index = repo.index().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+
+        let parent_commit = repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .and_then(|oid| repo.find_commit(oid).ok());
+        let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
+
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+            .unwrap();
+    }
+
     fn write_file_and_stage(repo: &Repository, path: &str, contents: &str) {
         let repo_root = repo.workdir().unwrap();
         let file_path = repo_root.join(path);
@@ -721,8 +863,10 @@ mod tests {
         };
         let extractor = StubSemExtractor::new(vec![Ok(None), Ok(None)]);
 
-        let count = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
-        assert_eq!(count, 2);
+        let stats = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(stats.total_processed, 2);
+        assert_eq!(stats.added, 2);
+        assert_eq!(stats.already_there, 0);
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let events = db::get_events_for_date(&conn, &today).unwrap();
@@ -822,7 +966,10 @@ mod tests {
         }));
 
         assert!(result.is_ok(), "sync_repo_with_extractor panicked");
-        assert_eq!(result.unwrap().unwrap(), 2);
+        let stats = result.unwrap().unwrap();
+        assert_eq!(stats.total_processed, 2);
+        assert_eq!(stats.added, 2);
+        assert_eq!(stats.already_there, 0);
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let events = db::get_events_for_date(&conn, &today).unwrap();
@@ -860,9 +1007,11 @@ mod tests {
         assert!(events[0].data.get("sem").is_none());
 
         let enriching_extractor = StubSemExtractor::new(vec![Ok(Some(sample_sem_metadata()))]);
-        let count =
+        let stats =
             sync_repo_with_extractor(&repo_config, &conn, None, &enriching_extractor).unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(stats.added, 0);
+        assert_eq!(stats.already_there, 1);
+        assert_eq!(stats.total_processed, 1);
 
         let events = db::get_events_for_date(&conn, &today).unwrap();
         assert_eq!(events.len(), 1);
@@ -926,13 +1075,87 @@ mod tests {
         };
         let extractor = StubSemExtractor::new(vec![Err(anyhow!("sem failed")), Ok(None)]);
 
-        let count = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
-        assert_eq!(count, 2);
+        let stats = sync_repo_with_extractor(&repo_config, &conn, None, &extractor).unwrap();
+        assert_eq!(stats.total_processed, 2);
+        assert_eq!(stats.added, 2);
+        assert_eq!(stats.already_there, 0);
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let events = db::get_events_for_date(&conn, &today).unwrap();
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|event| event.data.get("sem").is_none()));
+    }
+
+    #[test]
+    fn test_sync_repo_range_imports_only_requested_date() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        let old_date = (chrono::Local::now() - chrono::Duration::days(10))
+            .format("%Y-%m-%d")
+            .to_string();
+        let recent_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        write_file_and_stage(&repo, "old.txt", "old\nold-2\n");
+        commit_in_repo_at(&repo, "Old ranged commit", &old_date);
+
+        write_file_and_stage(&repo, "recent.txt", "recent\n");
+        commit_in_repo_at(&repo, "Recent ranged commit", &recent_date);
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+
+        let count = sync_repo_range(&repo_config, &conn, None, &recent_date, &recent_date).unwrap();
+        assert_eq!(count, 1);
+
+        let recent_events = db::get_events_for_date(&conn, &recent_date).unwrap();
+        assert_eq!(recent_events.len(), 1);
+        assert_eq!(recent_events[0].data["message"], "Recent ranged commit");
+
+        let old_events = db::get_events_for_date(&conn, &old_date).unwrap();
+        assert!(old_events.is_empty());
+    }
+
+    #[test]
+    fn test_sync_repo_range_defers_out_of_window_history_to_full_sync() {
+        let dir = TempDir::new().unwrap();
+        let conn = make_test_conn();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        let old_date = (chrono::Local::now() - chrono::Duration::days(10))
+            .format("%Y-%m-%d")
+            .to_string();
+        let recent_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        write_file_and_stage(&repo, "old.txt", "old\n");
+        commit_in_repo_at(&repo, "Old ranged commit", &old_date);
+
+        write_file_and_stage(&repo, "recent.txt", "recent\n");
+        commit_in_repo_at(&repo, "Recent ranged commit", &recent_date);
+
+        let repo_config = crate::config::RepoConfig {
+            path: dir.path().to_string_lossy().to_string(),
+            name: Some("test-repo".to_string()),
+        };
+
+        let ranged_count =
+            sync_repo_range(&repo_config, &conn, None, &recent_date, &recent_date).unwrap();
+        assert_eq!(ranged_count, 1);
+        assert!(db::get_events_for_date(&conn, &old_date)
+            .unwrap()
+            .is_empty());
+
+        let full_stats = sync_repo(&repo_config, &conn, None).unwrap();
+        assert_eq!(full_stats.total_processed, 2);
+        assert_eq!(full_stats.added, 1);
+        assert_eq!(full_stats.already_there, 1);
+
+        let old_events = db::get_events_for_date(&conn, &old_date).unwrap();
+        assert_eq!(old_events.len(), 1);
+        assert_eq!(old_events[0].data["message"], "Old ranged commit");
     }
 
     #[test]

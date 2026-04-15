@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod ollama;
 pub mod openai;
 
+use crate::config::LlmProvider;
 use crate::db::Event;
 use crate::sem::from_value as sem_from_value;
 use anyhow::Result;
@@ -21,23 +22,29 @@ pub fn supported_providers() -> &'static [&'static str] {
 }
 
 pub fn make_backend(
-    provider: &str,
+    provider: LlmProvider,
     api_key: &str,
     model: Option<&str>,
     base_url: Option<&str>,
 ) -> Box<dyn LlmBackend> {
     match provider {
-        "openai" => Box::new(openai::OpenAiBackend {
+        LlmProvider::OpenAi => Box::new(openai::OpenAiBackend {
             api_key: api_key.to_string(),
-            model: model.unwrap_or("gpt-4o").to_string(),
+            model: model
+                .unwrap_or(LlmProvider::OpenAi.default_model())
+                .to_string(),
         }),
-        "ollama" => Box::new(ollama::OllamaBackend {
+        LlmProvider::Ollama => Box::new(ollama::OllamaBackend {
             base_url: base_url.unwrap_or("http://localhost:11434").to_string(),
-            model: model.unwrap_or("llama3.2").to_string(),
+            model: model
+                .unwrap_or(LlmProvider::Ollama.default_model())
+                .to_string(),
         }),
-        _ => Box::new(anthropic::AnthropicBackend {
+        LlmProvider::Anthropic => Box::new(anthropic::AnthropicBackend {
             api_key: api_key.to_string(),
-            model: model.unwrap_or("claude-sonnet-4-6").to_string(),
+            model: model
+                .unwrap_or(LlmProvider::Anthropic.default_model())
+                .to_string(),
         }),
     }
 }
