@@ -172,7 +172,9 @@ name = "smoke-repo"
     Assert-Contains $stoppedStatus "devjournal daemon: not running" "daemon did not report stopped after stop"
 
     $syncOutput = Invoke-ExternalCommand -FilePath $binPath -ArgumentList @("sync") -Label "devjournal sync" -TimeoutSeconds 60
-    Assert-Contains $syncOutput "Syncing smoke-repo..." "sync command did not run for the fixture repo"
+    Assert-Contains $syncOutput "Syncing smoke-repo" "sync command did not start for the fixture repo"
+    Assert-Contains $syncOutput "✓ Synced smoke-repo" "sync command did not report completion for the fixture repo"
+    Assert-Contains $syncOutput "total processed:" "sync command did not print sync metrics"
 
     $summaryJson = Invoke-ExternalCommand -FilePath $binPath -ArgumentList @("summary", "--format", "json") -Label "devjournal summary"
     Assert-Contains $summaryJson '"event_type": "commit"' "summary JSON did not contain a commit event"

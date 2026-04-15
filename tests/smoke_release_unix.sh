@@ -124,7 +124,9 @@ STATUS_STOPPED=$("$BIN" status)
 assert_contains "$STATUS_STOPPED" "devjournal daemon: not running" "daemon did not report stopped after stop"
 
 SYNC_OUTPUT=$("$BIN" sync 2>&1)
-assert_contains "$SYNC_OUTPUT" "Syncing smoke-repo..." "sync command did not run for the fixture repo"
+assert_contains "$SYNC_OUTPUT" "Syncing smoke-repo" "sync command did not start for the fixture repo"
+assert_contains "$SYNC_OUTPUT" "✓ Synced smoke-repo" "sync command did not report completion for the fixture repo"
+assert_contains "$SYNC_OUTPUT" "total processed:" "sync command did not print sync metrics"
 
 SUMMARY_JSON=$("$BIN" summary --format json)
 assert_contains "$SUMMARY_JSON" '"event_type": "commit"' "summary JSON did not contain a commit event"

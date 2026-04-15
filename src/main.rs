@@ -212,7 +212,7 @@ fn sync_summary_window(window: &summary::SummaryWindow, config: &config::Config)
         let repo_name = repo_config.display_name().to_string();
         let message = format!("Syncing {repo_name}");
         let success_message = repo_name.clone();
-        let _ = run_with_spinner(&message, &success_message, || {
+        run_with_spinner(&message, &success_message, || {
             git_poller::sync_repo_range(repo_config, &conn, author, window.from(), window.to())
                 .map(|_| ())
         })?;
