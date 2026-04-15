@@ -1,48 +1,129 @@
-# devjournal
+<h1 align="center">
+  Devjournal
+</h1>
 
-`devjournal` is a local-first CLI and background daemon that watches your git repositories, stores commit events in a local SQLite database, and turns your recent work into action-oriented markdown summaries using Anthropic, OpenAI, or Ollama.
+<p align="center">
+  <strong>Turn your git activity into standup-ready daily notes.</strong>
+</p>
 
-- Keeps your raw activity history on disk in a local SQLite database
-- Watches multiple repositories in the background, but summary commands still work without the daemon running
-- Groups output by project and focuses on what you actually changed, not git metadata
-- Supports markdown output for humans and JSON output for scripts and integrations
-- Uses optional semantic enrichment via `sem` for more concrete summaries when available
+<p align="center">
+  A local-first CLI that watches your repositories, stores commit events in SQLite,
+  and generates clean work summaries in Markdown.
+</p>
+
+<p align="center">
+  <a href="https://github.com/godart-corentin/devjournal/actions/workflows/ci.yml">
+    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/godart-corentin/devjournal/ci.yml?branch=main&label=CI">
+  </a>
+  <a href="https://github.com/godart-corentin/devjournal/releases">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/godart-corentin/devjournal">
+  </a>
+  <a href="https://github.com/godart-corentin/devjournal/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/godart-corentin/devjournal">
+  </a>
+  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-orange">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue">
+  <img alt="Privacy" src="https://img.shields.io/badge/privacy-local--first-lightgrey">
+</p>
+
+---
+
+`Devjournal` is a local-first CLI that watches one or more git repositories, stores commit events in a local SQLite database, and generates action-oriented work summaries in Markdown using Anthropic, OpenAI, or Ollama.
+
+It also works **without** the background daemon: summary commands can sync the exact time window they need on demand.
+
+## Table of contents
+
+- [Why Devjournal](#why-devjournal)
+- [Quick start](#quick-start)
+- [Example output](#example-output)
+- [What makes it different](#what-makes-it-different)
+- [What leaves your machine](#what-leaves-your-machine)
+- [Install](#install)
+- [First-time setup](#first-time-setup)
+- [Command overview](#command-overview)
+- [Common workflows](#common-workflows)
+- [How it works](#how-it-works)
+- [Providers](#providers)
+- [Platform support](#platform-support)
+- [Configuration](#configuration)
+- [No-LLM and local-only usage](#no-llm-and-local-only-usage)
+- [Behavior and limitations](#behavior-and-limitations)
+- [Troubleshooting](#troubleshooting)
+- [File locations](#file-locations)
+- [Shell completions](#shell-completions)
+- [Contributing](#contributing)
+- [Code of Conduct](#code-of-conduct)
+- [Security](#security)
+- [License](#license)
+- [Maintainers](#maintainers)
+
+## Why Devjournal
+
+Use `devjournal` if you want to:
+
+- turn commits into daily updates without writing notes by hand
+- keep a searchable local history of what you worked on
+- generate summaries only when you need them
+- stay local-first, with optional fully local generation through Ollama
+- export raw structured data as JSON for scripts and integrations
+
+`devjournal` focuses on what changed in your projects rather than dumping raw git metadata, and it can enrich summaries further with optional semantic data from `sem` when available.
+
+## Quick start
+
+Install it, add a repo, and generate today’s summary:
+
+```bash
+brew tap godart-corentin/devjournal
+brew install devjournal
+brew install sem-cli
+
+devjournal add /path/to/your/repo
+devjournal today
+```
+
+What happens here:
+
+- `devjournal add` creates the config file automatically if it does not exist yet
+- `devjournal today` syncs today’s commits before generating output
+- if no LLM is configured yet, `devjournal` starts inline setup and then continues automatically
 
 ## Example output
 
 ```markdown
-# Dev Journal - 2026-03-23
+# Dev Journal — 2026-03-23
 
 ## devjournal
 
-- Scaffolded Rust project with cargo, wired up all module stubs
 - Implemented SQLite database layer with WAL mode for concurrent daemon/CLI access
 - Added libgit2-based git poller with incremental commit detection
-- Wired up Anthropic and OpenAI LLM backends with a structured prompt builder
-- Shipped full CLI with clap: add, remove, status, log, today, summary, start/stop
+- Wired up Anthropic and OpenAI backends with a structured prompt builder
+- Shipped CLI commands for add, remove, status, log, today, summary, start, and stop
+- Improved Windows daemon shutdown handling and PID cleanup
 ```
 
-## Quickstart
+The generated output is grouped by project and written for humans, while JSON mode returns raw recorded events for automation.
 
-### 1. Install
+## What makes it different
 
-**macOS / Linux (install script):**
+- **Local-first by default** — commit events are stored in a local SQLite database on your machine
+- **Daemon optional** — background polling is useful, but summary commands still work without it
+- **Built for real updates** — output is grouped by project and focused on what changed
+- **Human and machine friendly** — Markdown for people, JSON for scripts
+- **Provider choice** — works with Anthropic, OpenAI, or Ollama
+- **Optional semantic enrichment** — uses `sem` when available for more concrete summaries
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/godart-corentin/devjournal/main/install.sh | sh
-```
+## What leaves your machine
 
-This downloads the latest pre-built binary to `~/.local/bin` by default. Set `DEVJOURNAL_INSTALL_DIR` to install elsewhere.
+- recorded commit events stay in your local SQLite database
+- Markdown summary commands send event data to your configured provider to generate summary text
+- `--format json` skips the LLM call entirely and returns recorded event objects directly
+- if you use Ollama with a local `base_url`, summary generation stays on your machine
 
-The installer:
+## Install
 
-- Downloads the matching release archive
-- Downloads the published SHA256 checksum manifest
-- Verifies the archive before extracting it
-- Writes an install marker so `devjournal update` can keep updating script installs
-- Tries to install `sem` automatically when Homebrew or Cargo is available
-
-**Homebrew:**
+### Homebrew
 
 ```bash
 brew tap godart-corentin/devjournal
@@ -50,13 +131,39 @@ brew install devjournal
 brew install sem-cli
 ```
 
-Homebrew installs `devjournal` itself. Install `sem` alongside it for the best summaries, then re-run `devjournal sync` to backfill semantic metadata. For Homebrew installs, use `brew upgrade devjournal` instead of `devjournal update`.
+Install `sem` alongside `devjournal` for the best summaries, then run `devjournal sync` to backfill semantic metadata.
 
-**Windows:**
+For Homebrew installs, upgrade with:
 
-Install from the [latest GitHub release](https://github.com/godart-corentin/devjournal/releases/latest). The shell installer is macOS/Linux-only, and `devjournal update` is currently disabled on Windows while the replacement flow is being hardened.
+```bash
+brew upgrade devjournal
+```
 
-**Build from source** (requires Rust):
+### macOS / Linux install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/godart-corentin/devjournal/main/install.sh | sh
+```
+
+The install script:
+
+- downloads the latest matching release archive
+- verifies it using the published SHA256 checksum manifest
+- installs the binary to `~/.local/bin` by default
+- writes an install marker for future `devjournal update` support
+- tries to install `sem` automatically when Homebrew or Cargo is available
+
+Set `DEVJOURNAL_INSTALL_DIR` to install somewhere else.
+
+### Windows
+
+Install from the latest GitHub release.
+
+The shell installer is macOS/Linux only, and `devjournal update` is currently disabled on Windows while the replacement flow is being hardened.
+
+### Build from source
+
+Requires Rust:
 
 ```bash
 git clone git@github.com:godart-corentin/devjournal.git
@@ -65,78 +172,171 @@ cargo build --release
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
 
-### 2. Add a repository
+## First-time setup
+
+### 1) Add one or more repositories
 
 ```bash
 devjournal add /path/to/your/repo
 devjournal add /path/to/another/repo --name my-project
 ```
 
-`devjournal add` creates the config file if it does not exist yet, adds the repo, and keeps setup minimal. It does not require LLM configuration up front.
+If the config file does not exist yet, `devjournal add` creates it automatically.
 
-If another tracked repo already uses the same display name, `devjournal` will auto-suffix the new one, for example `my-project-2`.
+LLM configuration is not required up front.
 
-### 3. Generate a summary
+If another tracked repo already uses the same display name, `devjournal` auto-suffixes the new one, such as `my-project-2`.
+
+### 2) Generate your first summary
 
 ```bash
 devjournal today
 ```
 
-`devjournal today` syncs only today's commits before generating output. If you have not configured an LLM yet, it launches inline setup and then continues directly to today's summary.
+This syncs only today’s commits before generating output.
 
-### 4. Optional guided setup and background polling
+If you have not configured an LLM yet, `devjournal` launches inline setup and then continues directly to today’s summary.
+
+### 3) Optional guided setup
 
 ```bash
 devjournal init
+```
+
+Use `init` if you want a guided flow for author and LLM settings rather than relying on automatic setup during your first summary command.
+
+### 4) Optional background polling
+
+```bash
 devjournal start
 ```
 
-Use `devjournal init` if you want a guided setup flow for author and LLM settings. Use `devjournal start` if you want the optional background daemon to keep polling repos between summary runs.
+Use the daemon if you want your tracked repositories polled continuously between summary runs.
 
-## What leaves your machine
+It is optional.
 
-- Commit events are stored locally in SQLite on your machine
-- Markdown summary commands send event data to your configured provider to generate the summary text
-- `--format json` on summary-style commands returns recorded events directly and skips the LLM call
-- If you use Ollama with a local `base_url`, summary generation stays on your machine
+## Command overview
+
+| Command                  | What it does                                    |
+| ------------------------ | ----------------------------------------------- |
+| `devjournal add`         | Track a repository                              |
+| `devjournal remove`      | Stop tracking a repository                      |
+| `devjournal today`       | Generate today’s summary                        |
+| `devjournal week`        | Generate a summary for the current week         |
+| `devjournal month`       | Generate a summary for the current month        |
+| `devjournal summary`     | Generate a summary for a specific date or range |
+| `devjournal log`         | Inspect recorded events                         |
+| `devjournal sync`        | Backfill history into the local database        |
+| `devjournal start`       | Start the optional background daemon            |
+| `devjournal stop`        | Stop the daemon                                 |
+| `devjournal status`      | Check daemon state                              |
+| `devjournal doctor`      | Validate your setup                             |
+| `devjournal update`      | Self-update script-installed binaries           |
+| `devjournal config`      | Print the active config path                    |
+| `devjournal list`        | List tracked repositories                       |
+| `devjournal search`      | Search recorded commit events by keyword        |
+| `devjournal prune`       | Delete events older than a retention window     |
+| `devjournal completions` | Generate shell completions                      |
+
+## Common workflows
+
+### Daily use
+
+```bash
+devjournal today
+```
+
+### Backfill older history
+
+```bash
+devjournal sync
+devjournal sync my-project
+devjournal sync /path/to/repo
+```
+
+### Summarize a specific date or date range
+
+```bash
+devjournal summary 2026-03-23
+devjournal summary --from 2026-03-01 --to 2026-03-07
+devjournal week
+devjournal month
+```
+
+### Search your recorded history
+
+```bash
+devjournal search "sqlite"
+devjournal search "auth" --repo my-project
+```
+
+### Return raw JSON instead of Markdown
+
+```bash
+devjournal today --format json
+devjournal summary --from 2026-03-01 --to 2026-03-07 --format json
+devjournal log --from 2026-03-01 --to 2026-03-07 --format json
+```
+
+For summary-style commands, JSON mode skips the LLM call entirely and returns recorded event objects directly.
+
+Summary commands still sync the requested time window before returning JSON output.
+
+### Check setup and update
+
+```bash
+devjournal doctor
+devjournal update
+```
+
+For the full CLI surface:
+
+```bash
+devjournal --help
+```
 
 ## How it works
 
-1. A background daemon polls your configured repositories on a fixed interval. The default is 60 seconds.
-2. New commits since the last poll are recorded as events in a local SQLite database.
-3. When you run a summary command such as `devjournal today`, the CLI first syncs just the requested time window into the local database.
-4. The CLI then reads the relevant events for that same window from the database.
-5. For markdown summaries, `devjournal` sends those events to the configured provider and asks for a structured summary grouped by project.
-6. The generated markdown is printed to stdout and cached in the summaries directory. Subsequent runs reuse the cache unless events changed or you pass `--force`.
+1. The optional background daemon polls your configured repositories on a fixed interval
+2. New commits since the last poll are recorded as events in the local SQLite database
+3. When you run a summary command like `devjournal today`, the CLI first syncs just the requested time window into the database
+4. The CLI reads the relevant events for that same window
+5. For Markdown summaries, `devjournal` sends those events to the configured provider and asks for a structured summary grouped by project
+6. When activity exists, the generated Markdown is printed to stdout and cached in the summaries directory
 
-The daemon and CLI share the same database directly. There is no separate API server or IPC layer, and summary commands work whether or not the daemon is currently running.
+The daemon and CLI share the same database directly.
 
-## Providers and platform support
+There is no separate API server or IPC layer, and summary commands work whether or not the daemon is running.
 
-### LLM providers
+## Providers
 
-`devjournal` supports these providers:
+| Provider    | Default model       | API key required | Local-only possible |
+| ----------- | ------------------- | ---------------- | ------------------- |
+| `anthropic` | `claude-sonnet-4-6` | Yes              | No                  |
+| `openai`    | `gpt-4o-mini`       | Yes              | No                  |
+| `ollama`    | `llama3.2`          | No               | Yes                 |
 
-- `anthropic`
-- `openai`
-- `ollama`
+If you point Ollama at a local `base_url`, summary generation can stay entirely on your machine.
 
-Provider defaults from the current CLI:
+## Platform support
 
-- Anthropic default model: `claude-sonnet-4-6`
-- OpenAI default model: `gpt-4o-mini`
-- Ollama default model: `llama3.2`
+| Platform | Notes                           |
+| -------- | ------------------------------- |
+| macOS    | Supported by the install script |
+| Linux    | Supported by the install script |
+| Windows  | Install from GitHub releases    |
 
-### Platform notes
+`devjournal update` self-updates only for binaries installed through `install.sh`.
 
-- The install script supports macOS and Linux
-- Windows users should install from the GitHub releases page
-- `devjournal update` self-updates only for binaries installed through `install.sh`; Homebrew installs should use `brew upgrade devjournal`
-- Self-update is currently disabled on Windows
+Homebrew installs should use `brew upgrade devjournal`, and self-update is currently disabled on Windows.
 
-## Configuration essentials
+## Configuration
 
-The config file is TOML. It is created automatically the first time you run `devjournal add`, or by `devjournal init` if you prefer guided setup.
+The config file is TOML.
+
+It is created automatically the first time you run `devjournal add`, or by `devjournal init` if you prefer guided setup.
+
+Example:
 
 ```toml
 [general]
@@ -150,23 +350,23 @@ model = "claude-sonnet-4-6"
 # base_url = "http://localhost:11434"
 
 [[repos]]
-path = "/Users/tylia/workspace/perso/devjournal"
+path = "/Users/yourname/workspace/devjournal"
 name = "devjournal"
 ```
 
-Important settings:
+### Important settings
 
-| Setting | Default | Notes |
-| ------- | ------- | ----- |
-| `general.poll_interval_secs` | `60` | Poll interval in seconds. Minimum effective value is 1. |
-| `general.author` | — | Required. Only commits by this author are recorded, and the match must be exact. |
-| `general.retention_days` | — | Optional automatic retention window for old events. |
-| `llm.provider` | `"anthropic"` | One of `"anthropic"`, `"openai"`, or `"ollama"`. |
-| `llm.model` | provider-specific | Anthropic: `claude-sonnet-4-6`. OpenAI: `gpt-4o-mini`. Ollama: `llama3.2`. |
-| `llm.api_key` | — | `DEVJOURNAL_API_KEY` takes precedence. Not required for Ollama. |
-| `llm.base_url` | `http://localhost:11434` | Ollama only. Change this for remote Ollama instances. |
-| `llm.system_prompt` | — | Optional custom prompt that replaces the default summary instructions. |
-| `repos[].name` | folder name | Defaults to the repository folder name when omitted. |
+| Setting                      | Default                  | Notes                                                                     |
+| ---------------------------- | ------------------------ | ------------------------------------------------------------------------- |
+| `general.poll_interval_secs` | `60`                     | Poll interval in seconds                                                  |
+| `general.author`             | none                     | Required; only commits by this exact author name are recorded             |
+| `general.retention_days`     | none                     | Optional automatic retention window for old events                        |
+| `llm.provider`               | `"anthropic"`            | One of `"anthropic"`, `"openai"`, or `"ollama"`                           |
+| `llm.model`                  | provider-specific        | Anthropic: `claude-sonnet-4-6`, OpenAI: `gpt-4o-mini`, Ollama: `llama3.2` |
+| `llm.api_key`                | none                     | `DEVJOURNAL_API_KEY` takes precedence; not required for Ollama            |
+| `llm.base_url`               | `http://localhost:11434` | Ollama only                                                               |
+| `llm.system_prompt`          | none                     | Optional custom prompt that replaces the default summary instructions     |
+| `repos[].name`               | folder name              | Defaults to the repository folder name when omitted                       |
 
 To print the active config path:
 
@@ -174,126 +374,153 @@ To print the active config path:
 devjournal config
 ```
 
-## Common workflows
+## No-LLM and local-only usage
 
-### First-time setup
+You do not need an LLM to collect and store activity.
+
+- `devjournal add`, `sync`, `log`, and database-backed workflows still work without summary generation
+- `--format json` on summary-style commands skips the LLM call entirely
+- Ollama with a local `base_url` keeps summary generation on your machine
+
+## Behavior and limitations
+
+- on the very first poll of a repository, `devjournal` records only the current `HEAD`, not the full history
+- use `devjournal sync` to backfill older commits
+- `today`, `week`, `month`, and `summary` sync only the time window they need before reading events
+- `sem` is optional but recommended
+- without `sem`, `devjournal` still works using structured git diff metadata and selective patch fallbacks
+- the configured author must match your git author name exactly or commits will not be recorded
+- Non-empty Markdown summaries are cached in the summaries directory and reused unless events change or you pass `--force`
+
+## Troubleshooting
+
+### No events showing up in `devjournal log`
+
+Check whether the daemon is running:
 
 ```bash
-devjournal add /path/to/repo
-devjournal today
+devjournal status
 ```
 
-Optional follow-up commands:
-
-```bash
-devjournal init
-devjournal start
-```
-
-### Backfill history after setup
+If it started but still shows 0 events, wait one poll interval and check again, or backfill immediately with:
 
 ```bash
 devjournal sync
-devjournal sync my-project
-devjournal sync /path/to/repo
 ```
 
-### Generate summaries for other periods
+### `devjournal today` returns `No activity recorded`
+
+`devjournal today` syncs today’s window before reading events, so this usually means there are no matching commits for today.
+
+For past dates, use:
 
 ```bash
 devjournal summary 2026-03-23
 devjournal summary --from 2026-03-01 --to 2026-03-07
-devjournal week
-devjournal month
 ```
 
-### Return raw JSON instead of markdown
+Use `devjournal sync` for full backfill.
+
+### API key not found
+
+`DEVJOURNAL_API_KEY` takes precedence over `api_key` in the config file.
+
+Make sure it is exported in the shell where you run summary commands.
+
+### `stop` times out on Windows
+
+`devjournal stop` uses `TerminateProcess` on Windows and can fail if the daemon was started from a different privilege context.
+
+Stop it manually with Task Manager or:
 
 ```bash
-devjournal today --format json
-devjournal summary --from 2026-03-01 --to 2026-03-07 --format json
-devjournal log --from 2026-03-01 --to 2026-03-07 --format json
+taskkill /PID <pid> /F
 ```
 
-For summary commands, JSON output skips the LLM call entirely and returns recorded event objects instead.
+Then remove the stale PID file from:
 
-Summary commands still sync the requested window before returning JSON output.
+```text
+%LOCALAPPDATA%\devjournal\devjournal.pid
+```
 
-### Check your setup and update the binary
+### Config file not found
+
+Run:
 
 ```bash
-devjournal doctor
-devjournal update
+devjournal add /path/to/repo
 ```
 
-For the complete CLI surface, run `devjournal --help` or `devjournal <command> --help`.
+to create the config with defaults, or:
 
-## Behavior and limitations
+```bash
+devjournal init
+```
 
-- On the very first poll of a repo, `devjournal` records only the current `HEAD`, not the full history
-- Use `devjournal sync` to backfill older commits into the database
-- `devjournal today`, `devjournal week`, `devjournal month`, and `devjournal summary ...` sync only their requested window before reading events
-- `sem` is optional but recommended; if it is unavailable, `devjournal` still works using structured git diff metadata and selective patch fallbacks
-- The configured author must match your git author name exactly or commits will not be recorded
-- Markdown summaries are cached in the summaries directory and reused unless events change or you pass `--force`
+for guided setup.
 
-## Troubleshooting
+### Database schema error on startup
 
-**No events showing up in `devjournal log`?**  
-Check that the daemon is running with `devjournal status`. If it started but shows 0 events, wait one poll interval and check again. You can also backfill history immediately with `devjournal sync`.
+`devjournal` applies lightweight automatic database migrations when opening SQLite.
 
-**`devjournal today` returns "No activity recorded"?**  
-`devjournal today` syncs today's window before reading events, so this usually means there really are no matching commits for today. For past dates, use `devjournal summary <date>` or `devjournal summary --from A --to B`, which sync only that requested window before generating output. Use `devjournal sync` for full backfill.
+If you see an unsupported newer schema version error, upgrade `devjournal` or restore a compatible database backup.
 
-**API key not found?**  
-`DEVJOURNAL_API_KEY` takes precedence over `api_key` in the config file. Make sure it is exported in the shell where you run summary commands.
+### `no author configured` on start
 
-**`stop` times out on Windows?**  
-`devjournal stop` uses `TerminateProcess` on Windows and can fail if the daemon was started from a different privilege context. In that case, stop it manually with Task Manager or `taskkill /PID <pid> /F`, then remove the stale PID file from `%LOCALAPPDATA%\devjournal\devjournal.pid`.
+Add your git author name under `[general]`:
 
-**Config file not found?**  
-Run `devjournal add <path>` to create the config with defaults, or `devjournal init` if you want guided setup.
+```toml
+author = "Your Name"
+```
 
-**Database schema error on startup?**  
-`devjournal` applies lightweight automatic database migrations when opening SQLite. If you see an unsupported newer schema version error, upgrade `devjournal` or restore a compatible database backup.
+It must match your git author exactly.
 
-**"no author configured" on start?**  
-Add your git author name under `[general]` as `author = "Your Name"`. It must match your git author exactly.
+### Ollama: `Failed to call Ollama API`
 
-**Ollama: "Failed to call Ollama API"?**  
-Start Ollama with `ollama serve`, then confirm the model is available with `ollama list`. If Ollama runs on another machine, set `base_url` accordingly.
+Start Ollama and confirm the model exists:
 
-**Warnings about `sem` extraction?**  
-`devjournal` still records commits and generates summaries without `sem`. Install or repair `sem`, then re-run `devjournal sync` to backfill richer semantic metadata.
+```bash
+ollama serve
+ollama list
+```
 
-## Reference
+If Ollama runs on another machine, set `base_url` accordingly.
 
-### File paths
+### Warnings about `sem` extraction
 
-| Purpose | macOS | Linux | Windows |
-| ------- | ----- | ----- | ------- |
-| Config | `~/Library/Application Support/devjournal/config.toml` | `~/.config/devjournal/config.toml` | `%APPDATA%\devjournal\config.toml` |
-| Database | `~/Library/Application Support/devjournal/events.db` | `~/.local/share/devjournal/events.db` | `%LOCALAPPDATA%\devjournal\events.db` |
-| PID file | `~/Library/Application Support/devjournal/devjournal.pid` | `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid` |
+`devjournal` still records commits and generates summaries without `sem`.
+
+Install or repair it, then run `devjournal sync` again to backfill richer semantic metadata.
+
+## File locations
+
+| Purpose    | macOS                                                     | Linux                                      | Windows                                    |
+| ---------- | --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------ |
+| Config     | `~/Library/Application Support/devjournal/config.toml`    | `~/.config/devjournal/config.toml`         | `%APPDATA%\devjournal\config.toml`         |
+| Database   | `~/Library/Application Support/devjournal/events.db`      | `~/.local/share/devjournal/events.db`      | `%LOCALAPPDATA%\devjournal\events.db`      |
+| PID file   | `~/Library/Application Support/devjournal/devjournal.pid` | `~/.local/share/devjournal/devjournal.pid` | `%LOCALAPPDATA%\devjournal\devjournal.pid` |
 | Daemon log | `~/Library/Application Support/devjournal/devjournal.log` | `~/.local/share/devjournal/devjournal.log` | `%LOCALAPPDATA%\devjournal\devjournal.log` |
-| Summaries | `~/Library/Application Support/devjournal/summaries/` | `~/.local/share/devjournal/summaries/` | `%LOCALAPPDATA%\devjournal\summaries\` |
+| Summaries  | `~/Library/Application Support/devjournal/summaries/`     | `~/.local/share/devjournal/summaries/`     | `%LOCALAPPDATA%\devjournal\summaries\`     |
 
-### Shell completions
+## Shell completions
 
-**Bash:**
+### Bash
 
 ```bash
 devjournal completions bash > ~/.local/share/bash-completion/completions/devjournal
 ```
 
-**Zsh:**
+### Zsh
 
 ```zsh
 devjournal completions zsh > ~/.zfunc/_devjournal
-# Add to .zshrc: fpath+=~/.zfunc; autoload -Uz compinit; compinit
+# Add to .zshrc:
+fpath+=~/.zfunc
+autoload -Uz compinit
+compinit
 ```
 
-**Fish:**
+### Fish
 
 ```fish
 devjournal completions fish > ~/.config/fish/completions/devjournal.fish
@@ -301,20 +528,24 @@ devjournal completions fish > ~/.config/fish/completions/devjournal.fish
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs, request features, set up the project locally, and prepare focused pull requests.
+Contributions are welcome.
+
+See `CONTRIBUTING.md` for bug reports, feature requests, local setup, and focused pull request guidance.
 
 ## Code of Conduct
 
-This project follows the guidelines in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) to help keep the community welcoming and respectful for everyone.
+This project follows `CODE_OF_CONDUCT.md` to help keep the community welcoming and respectful.
 
 ## Security
 
-If you believe you have found a security issue, please follow the private reporting guidance in [SECURITY.md](SECURITY.md) instead of opening a public issue.
+If you believe you found a security issue, use the private reporting guidance in `SECURITY.md` rather than opening a public issue.
 
 ## License
 
-`devjournal` is licensed under the [Apache-2.0 License](LICENSE).
+`devjournal` is licensed under the Apache-2.0 License.
 
 ## Maintainers
 
-Release flow, packaging details, and versioning checks live in [RELEASING.md](RELEASING.md). The in-repo [Homebrew formula](Formula/devjournal.rb) remains the canonical formula source for releases, but the maintainer workflow is intentionally kept out of the user-facing README.
+Release flow, packaging details, and versioning checks live in `RELEASING.md`.
+
+The in-repo Homebrew formula remains the canonical formula source for releases, while maintainer-specific workflow details stay out of the user-facing README.
