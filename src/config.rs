@@ -212,7 +212,7 @@ pub fn load() -> Result<Config> {
     let path = config_path();
     if !path.exists() {
         bail!(
-            "Config file not found at {}. Run `devjournal init` to get started.",
+            "Config file not found at {}. Run `devjournal add <path>` to get started, or `devjournal init` for guided setup.",
             path.display()
         );
     }
@@ -289,10 +289,10 @@ pub fn remove_repo(path: &str) -> Result<()> {
 }
 
 fn prompt_line(message: &str) -> Result<String> {
-    print!("{message}");
-    io::stdout()
+    eprint!("{message}");
+    io::stderr()
         .flush()
-        .context("Failed to flush prompt to stdout")?;
+        .context("Failed to flush prompt to stderr")?;
 
     let mut buf = String::new();
     let read = io::stdin()
@@ -306,14 +306,14 @@ fn prompt_line(message: &str) -> Result<String> {
     Ok(buf.trim().to_string())
 }
 
-fn select_provider_interactive() -> Result<LlmProvider> {
-    println!("\nChoose a provider:");
+fn prompt_for_provider() -> Result<LlmProvider> {
+    eprintln!("Choose a provider:");
     for (i, provider) in LlmProvider::ALL.iter().enumerate() {
-        println!("{}. {}", i + 1, provider.label());
+        eprintln!("{}. {}", i + 1, provider.label());
     }
 
     loop {
-        let input = prompt_line("\n> ")?;
+        let input = prompt_line("> ")?;
 
         if input.is_empty() {
             return Ok(LlmProvider::default());
@@ -325,26 +325,42 @@ fn select_provider_interactive() -> Result<LlmProvider> {
             }
         }
 
-        println!("Please choose a valid number.");
+        eprintln!("Please choose a valid number.");
     }
 }
 
-fn select_model_interactive(provider: LlmProvider) -> Result<String> {
+fn prompt_for_api_key(provider: LlmProvider) -> Result<Option<String>> {
+    if !provider.requires_api_key() {
+        return Ok(None);
+    }
+
+    eprintln!();
+    loop {
+        let key = prompt_line("Enter your API key:\n> ")?;
+        if !key.is_empty() {
+            return Ok(Some(key));
+        }
+        eprintln!("API key is required for this provider.");
+    }
+}
+
+fn prompt_for_model(provider: LlmProvider) -> Result<String> {
     match provider {
         LlmProvider::Anthropic => {
             let models = provider.suggested_models();
 
-            println!("\nSelect model:");
+            eprintln!();
+            eprintln!("Select model:");
             for (i, model) in models.iter().enumerate() {
                 if i == 0 {
-                    println!("{}. {} (default)", i + 1, model);
+                    eprintln!("{}. {} (default)", i + 1, model);
                 } else {
-                    println!("{}. {}", i + 1, model);
+                    eprintln!("{}. {}", i + 1, model);
                 }
             }
 
             loop {
-                let input = prompt_line("\n> ")?;
+                let input = prompt_line("> ")?;
 
                 if input.is_empty() {
                     return Ok(models[0].to_string());
@@ -356,12 +372,13 @@ fn select_model_interactive(provider: LlmProvider) -> Result<String> {
                     }
                 }
 
-                println!("Please choose a valid number.");
+                eprintln!("Please choose a valid number.");
             }
         }
         LlmProvider::OpenAi | LlmProvider::Ollama => {
             let default_model = provider.default_model();
-            let entered = prompt_line(&format!("\nSelect model [{default_model}]:\n> "))?;
+            eprintln!();
+            let entered = prompt_line(&format!("Select model [{default_model}]:\n> "))?;
             if entered.is_empty() {
                 Ok(default_model.to_string())
             } else {
@@ -369,6 +386,20 @@ fn select_model_interactive(provider: LlmProvider) -> Result<String> {
             }
         }
     }
+}
+
+fn prompt_for_llm_config(current: &LlmConfig) -> Result<LlmConfig> {
+    let provider = prompt_for_provider()?;
+    let api_key = prompt_for_api_key(provider)?;
+    let model = prompt_for_model(provider)?;
+
+    Ok(LlmConfig {
+        provider,
+        api_key,
+        model: Some(model),
+        base_url: current.base_url.clone(),
+        system_prompt: current.system_prompt.clone(),
+    })
 }
 
 pub fn llm_needs_setup(llm: &LlmConfig) -> bool {
@@ -388,31 +419,9 @@ pub fn ensure_llm_configured_interactive(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    println!("No LLM configured.\n");
-    let provider = select_provider_interactive()?;
-
-    let api_key = if provider.requires_api_key() {
-        loop {
-            let key = prompt_line("\nEnter your API key:\n> ")?;
-            if !key.is_empty() {
-                break Some(key);
-            }
-            println!("API key is required for this provider.");
-        }
-    } else {
-        None
-    };
-
-    let model = select_model_interactive(provider)?;
-
-    config.llm = LlmConfig {
-        provider,
-        api_key,
-        model: Some(model),
-        base_url: config.llm.base_url.clone(),
-        system_prompt: config.llm.system_prompt.clone(),
-    };
-
+    eprintln!("No LLM configured.");
+    config.llm = prompt_for_llm_config(&config.llm)?;
+    eprintln!();
     save(config)
 }
 
@@ -476,21 +485,7 @@ pub fn init() -> Result<()> {
         Some(author_input)
     };
 
-    let provider = select_provider_interactive()?;
-
-    let api_key = if provider.requires_api_key() {
-        loop {
-            let key = prompt_line("API key: ")?;
-            if !key.is_empty() {
-                break Some(key);
-            }
-            println!("API key is required for {}.", provider.as_str());
-        }
-    } else {
-        None
-    };
-
-    let model = select_model_interactive(provider)?;
+    let llm = prompt_for_llm_config(&LlmConfig::default())?;
 
     let repo_path = if git2::Repository::open(".").is_ok() {
         let cwd = std::env::current_dir()
@@ -508,7 +503,13 @@ pub fn init() -> Result<()> {
         None
     };
 
-    let config = build_config(author, provider, api_key, &model, repo_path);
+    let config = build_config(
+        author,
+        llm.provider,
+        llm.api_key.clone(),
+        llm.model.as_deref().unwrap_or(llm.provider.default_model()),
+        repo_path,
+    );
     save(&config)?;
 
     println!("\nConfig written to {}", path.display());
@@ -524,7 +525,8 @@ pub fn init() -> Result<()> {
         println!("Install hint: {}", sem_probe.install_hint);
     }
 
-    println!("\nRun `devjournal start` to begin tracking.");
+    println!("\nDefault flow: `devjournal add <path>` then `devjournal today`.");
+    println!("Optional: run `devjournal start` for background polling.");
     Ok(())
 }
 

@@ -65,36 +65,33 @@ cargo build --release
 cp target/release/devjournal ~/.local/bin/devjournal
 ```
 
-### 2. Run the setup wizard
-
-```bash
-devjournal init
-```
-
-This walks you through author name, LLM provider, API key when needed, and model selection. It can also add the current directory as a watched repo and reports whether semantic enrichment is active, unavailable, or degraded.
-
-### 3. Add a repository
+### 2. Add a repository
 
 ```bash
 devjournal add /path/to/your/repo
 devjournal add /path/to/another/repo --name my-project
 ```
 
+`devjournal add` creates the config file if it does not exist yet, adds the repo, and keeps setup minimal. It does not require LLM configuration up front.
+
 If another tracked repo already uses the same display name, `devjournal` will auto-suffix the new one, for example `my-project-2`.
 
-### 4. Start the watcher
-
-```bash
-devjournal start
-```
-
-The daemon polls all configured repos on the interval set in your config. On Unix, `devjournal start` detaches from the invoking terminal so it keeps running after the shell closes.
-
-### 5. Generate a summary
+### 3. Generate a summary
 
 ```bash
 devjournal today
 ```
+
+`devjournal today` syncs only today's commits before generating output. If you have not configured an LLM yet, it launches inline setup and then continues directly to today's summary.
+
+### 4. Optional guided setup and background polling
+
+```bash
+devjournal init
+devjournal start
+```
+
+Use `devjournal init` if you want a guided setup flow for author and LLM settings. Use `devjournal start` if you want the optional background daemon to keep polling repos between summary runs.
 
 ## What leaves your machine
 
@@ -107,9 +104,10 @@ devjournal today
 
 1. A background daemon polls your configured repositories on a fixed interval. The default is 60 seconds.
 2. New commits since the last poll are recorded as events in a local SQLite database.
-3. When you run a summary command such as `devjournal today`, the CLI reads the relevant events from the database.
-4. For markdown summaries, `devjournal` sends those events to the configured provider and asks for a structured summary grouped by project.
-5. The generated markdown is printed to stdout and cached in the summaries directory. Subsequent runs reuse the cache unless events changed or you pass `--force`.
+3. When you run a summary command such as `devjournal today`, the CLI first syncs just the requested time window into the local database.
+4. The CLI then reads the relevant events for that same window from the database.
+5. For markdown summaries, `devjournal` sends those events to the configured provider and asks for a structured summary grouped by project.
+6. The generated markdown is printed to stdout and cached in the summaries directory. Subsequent runs reuse the cache unless events changed or you pass `--force`.
 
 The daemon and CLI share the same database directly. There is no separate API server or IPC layer, and summary commands work whether or not the daemon is currently running.
 
@@ -126,7 +124,7 @@ The daemon and CLI share the same database directly. There is no separate API se
 Provider defaults from the current CLI:
 
 - Anthropic default model: `claude-sonnet-4-6`
-- OpenAI default model: `gpt-4o`
+- OpenAI default model: `gpt-4o-mini`
 - Ollama default model: `llama3.2`
 
 ### Platform notes
@@ -138,7 +136,7 @@ Provider defaults from the current CLI:
 
 ## Configuration essentials
 
-The config file is TOML. It is created by `devjournal init`, or automatically the first time you run `devjournal add`.
+The config file is TOML. It is created automatically the first time you run `devjournal add`, or by `devjournal init` if you prefer guided setup.
 
 ```toml
 [general]
@@ -164,7 +162,7 @@ Important settings:
 | `general.author` | — | Required. Only commits by this author are recorded, and the match must be exact. |
 | `general.retention_days` | — | Optional automatic retention window for old events. |
 | `llm.provider` | `"anthropic"` | One of `"anthropic"`, `"openai"`, or `"ollama"`. |
-| `llm.model` | provider-specific | Anthropic: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Ollama: `llama3.2`. |
+| `llm.model` | provider-specific | Anthropic: `claude-sonnet-4-6`. OpenAI: `gpt-4o-mini`. Ollama: `llama3.2`. |
 | `llm.api_key` | — | `DEVJOURNAL_API_KEY` takes precedence. Not required for Ollama. |
 | `llm.base_url` | `http://localhost:11434` | Ollama only. Change this for remote Ollama instances. |
 | `llm.system_prompt` | — | Optional custom prompt that replaces the default summary instructions. |
@@ -181,10 +179,15 @@ devjournal config
 ### First-time setup
 
 ```bash
-devjournal init
 devjournal add /path/to/repo
-devjournal start
 devjournal today
+```
+
+Optional follow-up commands:
+
+```bash
+devjournal init
+devjournal start
 ```
 
 ### Backfill history after setup
@@ -214,6 +217,8 @@ devjournal log --from 2026-03-01 --to 2026-03-07 --format json
 
 For summary commands, JSON output skips the LLM call entirely and returns recorded event objects instead.
 
+Summary commands still sync the requested window before returning JSON output.
+
 ### Check your setup and update the binary
 
 ```bash
@@ -227,6 +232,7 @@ For the complete CLI surface, run `devjournal --help` or `devjournal <command> -
 
 - On the very first poll of a repo, `devjournal` records only the current `HEAD`, not the full history
 - Use `devjournal sync` to backfill older commits into the database
+- `devjournal today`, `devjournal week`, `devjournal month`, and `devjournal summary ...` sync only their requested window before reading events
 - `sem` is optional but recommended; if it is unavailable, `devjournal` still works using structured git diff metadata and selective patch fallbacks
 - The configured author must match your git author name exactly or commits will not be recorded
 - Markdown summaries are cached in the summaries directory and reused unless events change or you pass `--force`
@@ -237,7 +243,7 @@ For the complete CLI surface, run `devjournal --help` or `devjournal <command> -
 Check that the daemon is running with `devjournal status`. If it started but shows 0 events, wait one poll interval and check again. You can also backfill history immediately with `devjournal sync`.
 
 **`devjournal today` returns "No activity recorded"?**  
-The daemon must have polled at least once since you added the repo. Confirm with `devjournal log`. For past dates, the events for that date must already be in the database.
+`devjournal today` syncs today's window before reading events, so this usually means there really are no matching commits for today. For past dates, use `devjournal summary <date>` or `devjournal summary --from A --to B`, which sync only that requested window before generating output. Use `devjournal sync` for full backfill.
 
 **API key not found?**  
 `DEVJOURNAL_API_KEY` takes precedence over `api_key` in the config file. Make sure it is exported in the shell where you run summary commands.
@@ -246,7 +252,7 @@ The daemon must have polled at least once since you added the repo. Confirm with
 `devjournal stop` uses `TerminateProcess` on Windows and can fail if the daemon was started from a different privilege context. In that case, stop it manually with Task Manager or `taskkill /PID <pid> /F`, then remove the stale PID file from `%LOCALAPPDATA%\devjournal\devjournal.pid`.
 
 **Config file not found?**  
-Run `devjournal init` for guided setup, or `devjournal add <path>` to create the config with defaults.
+Run `devjournal add <path>` to create the config with defaults, or `devjournal init` if you want guided setup.
 
 **Database schema error on startup?**  
 `devjournal` applies lightweight automatic database migrations when opening SQLite. If you see an unsupported newer schema version error, upgrade `devjournal` or restore a compatible database backup.

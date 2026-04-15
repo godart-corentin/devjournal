@@ -10,6 +10,8 @@ mod update;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde::Serialize;
+use spinners::{Spinner, Spinners, Stream};
+use std::io::{self, IsTerminal};
 
 #[derive(Clone, clap::ValueEnum, Default)]
 enum Format {
@@ -30,11 +32,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the background daemon
+    /// Start the optional background daemon for continuous polling
     Start,
     /// Stop the running daemon
     Stop,
-    /// Generate and display today's summary
+    /// Sync today's commits, then generate today's summary
     Today {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
@@ -43,7 +45,7 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: Format,
     },
-    /// Generate and display summary for a specific date or range
+    /// Sync a requested date or range, then generate that summary
     Summary {
         /// Date to summarise (YYYY-MM-DD). Omit to use today.
         date: Option<String>,
@@ -60,7 +62,7 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: Format,
     },
-    /// Generate a rolling 7-day summary (today minus 6 days through today)
+    /// Sync and summarize the current rolling 7-day window (today minus 6 days through today)
     Week {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
@@ -69,7 +71,7 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: Format,
     },
-    /// Generate a rolling 30-day summary (today minus 29 days through today)
+    /// Sync and summarize the current rolling 30-day window (today minus 29 days through today)
     Month {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
@@ -78,7 +80,7 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: Format,
     },
-    /// Add a git repository to watch (auto-suffixes duplicate names)
+    /// Add a git repository to watch (creates config if needed)
     Add {
         path: String,
         #[arg(long)]
@@ -107,7 +109,7 @@ enum Commands {
     },
     /// Print the path to the config file
     Config,
-    /// Initialize devjournal with guided setup
+    /// Run the optional guided setup flow
     Init,
     /// List all watched repositories
     List,
@@ -135,9 +137,9 @@ enum Commands {
         /// Number of days to keep (events older than this are deleted)
         days: u32,
     },
-    /// Run diagnostic checks on your devjournal setup
+    /// Run advanced diagnostic checks on your devjournal setup
     Doctor,
-    /// Sync all git history for watched repos into the database
+    /// Backfill all git history for watched repos into the database
     Sync {
         /// Name or path of a specific repo to sync (syncs all if omitted)
         repo: Option<String>,
@@ -174,10 +176,79 @@ fn print_events_json(events: &[db::Event]) -> Result<()> {
     Ok(())
 }
 
-fn prepare_llm_config_for_summary() -> Result<config::Config> {
+fn run_with_spinner<T, F>(message: &str, success_message: &str, operation: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    if !io::stderr().is_terminal() {
+        eprintln!("{message}");
+        let result = operation();
+        if !success_message.is_empty() {
+            let status = if result.is_ok() { "✓" } else { "✗" };
+            eprintln!("{status} {success_message}");
+        }
+        return result;
+    }
+
+    let mut spinner = Spinner::with_stream(Spinners::Dots, message.to_string(), Stream::Stderr);
+    let result = operation();
+    if success_message.is_empty() {
+        spinner.stop();
+    } else {
+        let status = if result.is_ok() { "✓" } else { "✗" }.to_string();
+        spinner.stop_and_persist(&status, success_message.to_string());
+    }
+
+    result
+}
+
+fn sync_summary_window(window: &summary::SummaryWindow, config: &config::Config) -> Result<()> {
+    let conn = db::open()?;
+    let author = config.general.author.as_deref();
+    let label = window.display_label();
+    eprintln!("Syncing activity for {label}");
+
+    for repo_config in &config.repos {
+        let repo_name = repo_config.display_name().to_string();
+        let message = format!("Syncing {repo_name}");
+        let success_message = repo_name.clone();
+        let _ = run_with_spinner(&message, &success_message, || {
+            git_poller::sync_repo_range(repo_config, &conn, author, window.from(), window.to())
+                .map(|_| ())
+        })?;
+    }
+    eprintln!();
+
+    Ok(())
+}
+
+fn print_summary_window(
+    window: &summary::SummaryWindow,
+    force: bool,
+    format: Format,
+) -> Result<()> {
     let mut config = config::load()?;
-    config::ensure_llm_configured_interactive(&mut config)?;
-    Ok(config)
+    sync_summary_window(window, &config)?;
+
+    match format {
+        Format::Json => {
+            let conn = db::open()?;
+            let events = window.load_events(&conn)?;
+            print_events_json(&events)?;
+        }
+        Format::Markdown => {
+            config::ensure_llm_configured_interactive(&mut config)?;
+            let label = window.display_label();
+            let message = format!("Generating summary for {label}");
+            let success_message = format!("Generated summary for {label}.");
+            let text = run_with_spinner(&message, &success_message, || {
+                window.generate_markdown(&config.llm, force)
+            })?;
+            println!("{}", text);
+        }
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -198,19 +269,8 @@ fn main() -> Result<()> {
         Some(Commands::Stop) => daemon::stop()?,
 
         Some(Commands::Today { force, format }) => {
-            let date = summary::today();
-            match format {
-                Format::Json => {
-                    let conn = db::open()?;
-                    let events = db::get_events_for_date(&conn, &date)?;
-                    print_events_json(&events)?;
-                }
-                Format::Markdown => {
-                    let config = prepare_llm_config_for_summary()?;
-                    let text = summary::generate(&date, &config.llm, force)?;
-                    println!("{}", text);
-                }
-            }
+            let window = summary::SummaryWindow::for_date(summary::today());
+            print_summary_window(&window, force, format)?;
         }
 
         Some(Commands::Summary {
@@ -219,83 +279,19 @@ fn main() -> Result<()> {
             to,
             force,
             format,
-        }) => match (date, from, to) {
-            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
-                anyhow::bail!("Cannot combine a positional date with --from/--to");
-            }
-            (_, Some(from), to) => {
-                let to = to.unwrap_or_else(summary::today);
-                match format {
-                    Format::Json => {
-                        let conn = db::open()?;
-                        let events = db::get_events_for_range(&conn, &from, &to)?;
-                        print_events_json(&events)?;
-                    }
-                    Format::Markdown => {
-                        let config = prepare_llm_config_for_summary()?;
-                        let text = summary::generate_range(&from, &to, &config.llm, force)?;
-                        println!("{}", text);
-                    }
-                }
-            }
-            (_, None, Some(_)) => {
-                anyhow::bail!("--to requires --from");
-            }
-            (date, None, None) => {
-                let date = date.unwrap_or_else(summary::today);
-                match format {
-                    Format::Json => {
-                        let conn = db::open()?;
-                        let events = db::get_events_for_date(&conn, &date)?;
-                        print_events_json(&events)?;
-                    }
-                    Format::Markdown => {
-                        let config = prepare_llm_config_for_summary()?;
-                        let text = summary::generate(&date, &config.llm, force)?;
-                        println!("{}", text);
-                    }
-                }
-            }
-        },
+        }) => {
+            let window = summary::SummaryWindow::from_summary_args(date, from, to)?;
+            print_summary_window(&window, force, format)?;
+        }
 
         Some(Commands::Week { force, format }) => {
-            use chrono::Duration;
-            let to = summary::today();
-            let from = (chrono::Local::now() - Duration::days(6))
-                .format("%Y-%m-%d")
-                .to_string();
-            match format {
-                Format::Json => {
-                    let conn = db::open()?;
-                    let events = db::get_events_for_range(&conn, &from, &to)?;
-                    print_events_json(&events)?;
-                }
-                Format::Markdown => {
-                    let config = prepare_llm_config_for_summary()?;
-                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
-                    println!("{}", text);
-                }
-            }
+            let window = summary::SummaryWindow::rolling_days(7);
+            print_summary_window(&window, force, format)?;
         }
 
         Some(Commands::Month { force, format }) => {
-            use chrono::Duration;
-            let to = summary::today();
-            let from = (chrono::Local::now() - Duration::days(29))
-                .format("%Y-%m-%d")
-                .to_string();
-            match format {
-                Format::Json => {
-                    let conn = db::open()?;
-                    let events = db::get_events_for_range(&conn, &from, &to)?;
-                    print_events_json(&events)?;
-                }
-                Format::Markdown => {
-                    let config = prepare_llm_config_for_summary()?;
-                    let text = summary::generate_range(&from, &to, &config.llm, force)?;
-                    println!("{}", text);
-                }
-            }
+            let window = summary::SummaryWindow::rolling_days(30);
+            print_summary_window(&window, force, format)?;
         }
 
         Some(Commands::Add { path, name }) => {
@@ -328,9 +324,15 @@ fn main() -> Result<()> {
             };
 
             for repo_config in repos {
-                print!("Syncing {}... ", repo_config.display_name());
-                let count = git_poller::sync_repo(repo_config, &conn, author)?;
-                println!("{} commit(s) added", count);
+                let repo_name = repo_config.display_name().to_string();
+                let message = format!("Syncing {repo_name}");
+                let success_message = format!("Synced {repo_name}");
+                let stats = run_with_spinner(&message, &success_message, || {
+                    git_poller::sync_repo(repo_config, &conn, author)
+                })?;
+                eprintln!("  added commits: {}", stats.added);
+                eprintln!("  already there: {}", stats.already_there);
+                eprintln!("  total processed: {}", stats.total_processed);
             }
         }
 
@@ -426,7 +428,7 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(_) => {
-                    println!("MISSING — run `devjournal init`");
+                    println!("MISSING — run `devjournal add <path>` or `devjournal init`");
                     issues += 1;
                 }
             }
