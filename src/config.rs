@@ -402,29 +402,6 @@ fn prompt_for_llm_config(current: &LlmConfig) -> Result<LlmConfig> {
     })
 }
 
-pub fn llm_needs_setup(llm: &LlmConfig) -> bool {
-    if llm.model.as_deref().is_none_or(str::is_empty) {
-        return true;
-    }
-
-    if !llm.provider.requires_api_key() {
-        return false;
-    }
-
-    api_key(llm).is_none()
-}
-
-pub fn ensure_llm_configured_interactive(config: &mut Config) -> Result<()> {
-    if !llm_needs_setup(&config.llm) {
-        return Ok(());
-    }
-
-    eprintln!("No LLM configured.");
-    config.llm = prompt_for_llm_config(&config.llm)?;
-    eprintln!();
-    save(config)
-}
-
 pub fn build_config(
     author: Option<String>,
     provider: LlmProvider,
@@ -678,32 +655,6 @@ name = "my-repo"
     #[test]
     fn test_inline_llm_model_default_for_openai() {
         assert_eq!(LlmProvider::OpenAi.default_model(), "gpt-4o-mini");
-    }
-
-    #[test]
-    fn test_llm_needs_setup_when_api_key_missing_for_hosted_provider() {
-        let llm = LlmConfig {
-            provider: LlmProvider::OpenAi,
-            api_key: None,
-            model: Some("gpt-4o-mini".to_string()),
-            base_url: None,
-            system_prompt: None,
-        };
-
-        assert!(llm_needs_setup(&llm));
-    }
-
-    #[test]
-    fn test_llm_does_not_need_setup_for_ollama_with_model() {
-        let llm = LlmConfig {
-            provider: LlmProvider::Ollama,
-            api_key: None,
-            model: Some("llama3.2".to_string()),
-            base_url: None,
-            system_prompt: None,
-        };
-
-        assert!(!llm_needs_setup(&llm));
     }
 
     #[test]
