@@ -277,6 +277,80 @@ name = "{name}"
             expected_message
         );
     }
+
+    fn assert_summary_pipeline_report_shape(
+        &self,
+        output: &str,
+        expected_date_label: &str,
+        expected_project_name: &str,
+        expected_message: &str,
+    ) {
+        let json: Value = serde_json::from_str(output).expect("valid JSON output");
+        let report = json
+            .as_object()
+            .expect("pipeline report should be an object");
+        let keys = report.keys().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["date_label".to_string(), "projects".to_string()])
+        );
+        assert_eq!(
+            report
+                .get("date_label")
+                .and_then(Value::as_str)
+                .expect("report should include a date_label"),
+            expected_date_label
+        );
+
+        let projects = report
+            .get("projects")
+            .and_then(Value::as_array)
+            .expect("report should include projects");
+        assert_eq!(
+            projects.len(),
+            1,
+            "expected one project in the debug report"
+        );
+
+        let project = projects[0]
+            .as_object()
+            .expect("project should be an object");
+        let project_keys = project.keys().cloned().collect::<BTreeSet<_>>();
+        assert_eq!(
+            project_keys,
+            BTreeSet::from(["outcomes".to_string(), "project_name".to_string()])
+        );
+        assert_eq!(
+            project
+                .get("project_name")
+                .and_then(Value::as_str)
+                .expect("project should include a project_name"),
+            expected_project_name
+        );
+
+        let outcomes = project
+            .get("outcomes")
+            .and_then(Value::as_array)
+            .expect("project should include outcomes");
+        assert!(!outcomes.is_empty(), "expected at least one outcome");
+
+        let outcome = outcomes[0]
+            .as_object()
+            .expect("outcome should be an object");
+        assert!(
+            outcome.get("supporting_messages").is_some(),
+            "outcome should include supporting_messages"
+        );
+        assert!(
+            outcome
+                .get("supporting_messages")
+                .and_then(Value::as_array)
+                .expect("supporting_messages should be an array")
+                .iter()
+                .any(|message| message.as_str() == Some(expected_message)),
+            "debug report should preserve the source commit message"
+        );
+    }
 }
 
 #[test]
@@ -481,6 +555,33 @@ fn sync_today_summary_log_and_search_emit_stable_json_envelopes() -> TestResult 
 }
 
 #[test]
+fn summary_debug_pipeline_outputs_report_shape() -> TestResult {
+    let fixture = ContractFixture::new()?;
+    fixture.init_git_repo()?;
+
+    let recent_date = fixture.today_date();
+    fixture.commit_file(
+        "notes.txt",
+        "recent fixture notes\n",
+        "Recent contract commit",
+        &recent_date,
+    )?;
+    fixture.write_config(&fixture.config_toml(Some(REPO_NAME)))?;
+
+    fixture.command().arg("sync").assert().success();
+
+    let debug_json = fixture.command_output(&["summary", &recent_date, "--debug-pipeline"])?;
+    fixture.assert_summary_pipeline_report_shape(
+        &debug_json,
+        &recent_date,
+        REPO_NAME,
+        "Recent contract commit",
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sync_reports_existing_commits_on_repeat_runs() -> TestResult {
     let fixture = ContractFixture::new()?;
     fixture.init_git_repo()?;
@@ -561,48 +662,39 @@ fn summary_commands_scope_sync_before_json_output() -> TestResult {
 }
 
 #[test]
-fn today_prompts_for_inline_llm_setup_and_then_continues() -> TestResult {
+fn today_uses_deterministic_markdown_fallback_when_llm_is_missing() -> TestResult {
     let fixture = ContractFixture::new()?;
     fixture.init_git_repo()?;
     fixture.write_config(&fixture.config_toml_missing_llm_key(Some(REPO_NAME)))?;
     let today = fixture.today_date();
+    fixture.commit_file(
+        "notes.txt",
+        "recent fixture notes\n",
+        "Recent contract commit",
+        &today,
+    )?;
 
-    let assert = fixture
+    fixture
         .command()
         .arg("today")
-        .write_stdin("2\nsk-test-inline\n\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "No activity recorded for this date.",
-        ))
+        .stdout(predicate::str::contains(format!("# Dev Journal — {today}")))
+        .stdout(predicate::str::contains("## fixture-repo"))
+        .stdout(predicate::str::contains("Recent contract commit"))
         .stderr(predicate::str::contains(format!(
             "Syncing activity for {today}"
         )))
-        .stderr(predicate::str::contains(
-            "Syncing fixture-repo\n✓ fixture-repo\n\nNo LLM configured.",
-        ))
-        .stderr(predicate::str::contains(format!(
-            "Syncing activity for {today}\nSyncing fixture-repo"
-        )))
         .stderr(predicate::str::contains("✓ fixture-repo"))
-        .stderr(predicate::str::contains(
-            "No LLM configured.\nChoose a provider:",
-        ))
-        .stderr(predicate::str::contains(
-            "Choose a provider:\n1. Anthropic\n2. OpenAI\n3. Local model (Ollama)\n> ",
-        ))
-        .stderr(predicate::str::contains("Enter your API key:\n> "))
-        .stderr(predicate::str::contains("Select model [gpt-4o-mini]:\n> "))
+        .stderr(predicate::str::contains("No LLM configured.").not())
+        .stderr(predicate::str::contains("Choose a provider:").not())
         .stderr(predicate::str::contains(format!(
             "Generating summary for {today}"
         )));
 
-    let _ = assert.get_output();
     let config_contents = std::fs::read_to_string(fixture.config_path())?;
-    assert!(config_contents.contains("provider = \"openai\""));
-    assert!(config_contents.contains("api_key = \"sk-test-inline\""));
-    assert!(config_contents.contains("model = \"gpt-4o-mini\""));
+    assert!(config_contents.contains("provider = \"anthropic\""));
+    assert!(!config_contents.contains("api_key = "));
 
     Ok(())
 }

@@ -110,6 +110,7 @@ The generated output is grouped by project and written for humans, while JSON mo
 - **Local-first by default** — commit events are stored in a local SQLite database on your machine
 - **Daemon optional** — background polling is useful, but summary commands still work without it
 - **Built for real updates** — output is grouped by project and focused on what changed
+- **High-signal standup summaries** — raw commits are compressed into grouped workstreams before summary data is sent to an LLM, keeping daily notes focused on outcomes instead of commit-by-commit narration
 - **Human and machine friendly** — Markdown for people, JSON for scripts
 - **Provider choice** — works with Anthropic, OpenAI, or Ollama
 - **Optional semantic enrichment** — uses `sem` when available for more concrete summaries
@@ -301,8 +302,9 @@ devjournal --help
 2. New commits since the last poll are recorded as events in the local SQLite database
 3. When you run a summary command like `devjournal today`, the CLI first syncs just the requested time window into the database
 4. The CLI reads the relevant events for that same window
-5. For Markdown summaries, `devjournal` sends those events to the configured provider and asks for a structured summary grouped by project
-6. When activity exists, the generated Markdown is printed to stdout and cached in the summaries directory
+5. Before any LLM call, `devjournal` normalizes those events into grouped workstreams so standup summaries stay high-signal
+6. For Markdown summaries, `devjournal` sends the normalized data to the configured provider and asks for a structured summary
+7. When activity exists, the generated Markdown is printed to stdout and cached in the summaries directory
 
 The daemon and CLI share the same database directly.
 
@@ -380,6 +382,7 @@ You do not need an LLM to collect and store activity.
 
 - `devjournal add`, `sync`, `log`, and database-backed workflows still work without summary generation
 - `--format json` on summary-style commands skips the LLM call entirely
+- `devjournal today --debug-pipeline` prints the normalized standup pipeline report as JSON without calling the LLM
 - Ollama with a local `base_url` keeps summary generation on your machine
 
 ## Behavior and limitations

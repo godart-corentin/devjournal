@@ -3,14 +3,13 @@ pub mod ollama;
 pub mod openai;
 
 use crate::config::LlmProvider;
-use crate::db::Event;
-use crate::sem::from_value as sem_from_value;
+use crate::summary_pipeline::outcome::OutcomeCandidate;
 use anyhow::Result;
 
 pub trait LlmBackend {
     fn summarize(
         &self,
-        events: &[Event],
+        outcomes: &[OutcomeCandidate],
         date: &str,
         custom_prompt: Option<&str>,
     ) -> Result<String>;
@@ -50,107 +49,32 @@ pub fn make_backend(
 }
 
 #[cfg(test)]
-fn build_prompt(events: &[Event], date: &str) -> String {
-    build_prompt_with_custom(events, date, None)
+fn build_prompt(outcomes: &[OutcomeCandidate], date: &str) -> String {
+    build_prompt_with_custom(outcomes, date, None)
 }
 
 pub fn build_prompt_with_custom(
-    events: &[Event],
+    outcomes: &[OutcomeCandidate],
     date: &str,
     custom_prompt: Option<&str>,
 ) -> String {
-    let is_range = date.contains(" to ");
-
-    let mut lines = if is_range {
-        vec![
-            format!("Here are all git commits recorded from {}:", date),
-            String::new(),
-        ]
-    } else {
-        vec![
-            format!("Here are all git commits recorded on {}:", date),
-            String::new(),
-        ]
-    };
-
-    let mut repos: std::collections::BTreeMap<String, Vec<&Event>> = Default::default();
-    for e in events {
-        let name = e.repo_name.clone().unwrap_or_else(|| e.repo_path.clone());
-        repos.entry(name).or_default().push(e);
+    let mut by_project = std::collections::BTreeMap::<String, Vec<&OutcomeCandidate>>::default();
+    for outcome in outcomes {
+        by_project
+            .entry(outcome.project_name.clone())
+            .or_default()
+            .push(outcome);
     }
 
-    for (repo_name, events) in &repos {
-        lines.push(format!("Project: {}", repo_name));
-        for e in events {
-            let branch = e.data["branch"].as_str().unwrap_or("unknown");
-            let message = e.data["message"].as_str().unwrap_or("no message");
-            let hash = e.data["hash"].as_str().unwrap_or("?");
-            lines.push(format!("  - [{}] ({}) {}", hash, branch, message));
-            let sem = sem_from_value(&e.data["sem"]);
-            if let Some(sem) = sem {
-                lines.push(format!("    semantic summary: {}", sem.summary));
+    let mut lines = vec![
+        format!("Here are grouped standup outcome candidates for {}:", date),
+        String::new(),
+    ];
 
-                if !sem.entities.is_empty() {
-                    let entities = sem
-                        .entities
-                        .iter()
-                        .map(|entity| {
-                            format!("{} {} [{}]", entity.kind, entity.name, entity.change_type)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    lines.push(format!("    entities: {}", entities));
-                }
-
-                if !sem.change_types.is_empty() {
-                    lines.push(format!("    change types: {}", sem.change_types.join(", ")));
-                }
-
-                if !sem.files.is_empty() {
-                    lines.push(format!("    files: {}", sem.files.join(", ")));
-                }
-            } else if let Some(diff) = e.data.get("diff") {
-                if let Some(stat_summary) =
-                    diff.get("stat_summary").and_then(|value| value.as_str())
-                {
-                    lines.push(format!("    diff summary: {}", stat_summary));
-                }
-
-                if let Some(files) = diff.get("files").and_then(|value| value.as_array()) {
-                    let files = files
-                        .iter()
-                        .filter_map(|file| {
-                            let path = file.get("path")?.as_str()?;
-                            let status = file
-                                .get("status")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or("modified");
-                            let additions = file
-                                .get("additions")
-                                .and_then(|value| value.as_u64())
-                                .unwrap_or(0);
-                            let deletions = file
-                                .get("deletions")
-                                .and_then(|value| value.as_u64())
-                                .unwrap_or(0);
-                            Some(format!(
-                                "{} {} (+{}/-{})",
-                                status, path, additions, deletions
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    if !files.is_empty() {
-                        lines.push(format!("    diff files: {}", files.join(", ")));
-                    }
-                }
-
-                if let Some(patch_excerpt) =
-                    diff.get("patch_excerpt").and_then(|value| value.as_str())
-                {
-                    lines.push("    patch excerpt:".to_string());
-                    lines.push(format!("```diff\n{}\n```", patch_excerpt));
-                }
-            }
+    for (project_name, project_outcomes) in &by_project {
+        lines.push(format!("Project: {project_name}"));
+        for outcome in project_outcomes {
+            lines.push(format!("  - {}", writer_candidate_line(outcome)));
         }
         lines.push(String::new());
     }
@@ -158,175 +82,240 @@ pub fn build_prompt_with_custom(
     if let Some(custom) = custom_prompt {
         lines.push(custom.to_string());
     } else {
-        if is_range {
-            lines.push("Please write a multi-day summary from the perspective of the developer who made these commits.".to_string());
-            lines.push(
-                "This covers multiple days — highlight key outcomes and progress across the period."
-                    .to_string(),
-            );
-        } else {
-            lines.push("Please write a daily standup summary from the perspective of the developer who made these commits.".to_string());
-            lines.push("This will be read aloud in a standup meeting — it must take no more than 1-3 minutes to read.".to_string());
-        }
+        lines.push("Write a Dev Journal summary for standup use.".to_string());
         lines.push("Rules:".to_string());
         lines.push(format!(
             "- Start the document with: # Dev Journal — {}",
             date
         ));
-        lines.push("- Create exactly one ## section per project, using the exact project name listed above as the header. Do NOT invent additional sections or sub-sections.".to_string());
-        lines.push("- STRICT ATTRIBUTION: each bullet must only describe commits listed under that specific project. Never move, copy, or infer work across project sections. A ticket number appearing in multiple projects must be described independently in each.".to_string());
-        if is_range {
-            lines.push("- Each project section should have 1-5 bullets (scale with the number of days). Merge closely related commits.".to_string());
-            lines.push(
-                "- Within each project section, organize bullets chronologically.".to_string(),
-            );
-        } else {
-            lines.push(
-                "- Each project section should have 1-3 bullets max. Merge related commits aggressively."
-                    .to_string(),
-            );
-        }
+        lines.push("- Create exactly one ## section per project, using the exact project name above as the header. Do NOT invent additional sections or sub-sections.".to_string());
+        lines.push("- Keep every bullet inside its own project. Never move, copy, or infer work across project sections.".to_string());
         lines.push("- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.".to_string());
-        lines.push("- When semantic summary, entities, or files are present for a commit, prefer those concrete signals to infer the real outcome instead of relying only on the commit message.".to_string());
-        lines.push("- When semantic metadata is missing, use structured diff summaries and diff file lists before falling back to any raw patch excerpt.".to_string());
-        lines.push("- Treat any patch excerpt as supporting evidence only. Do not narrate the patch line-by-line in the final summary.".to_string());
-        lines.push("- Collapse all iterative commits toward the same goal (lint fixes, import moves, minor fixes, test adjustments) into the final outcome bullet. Do not list them separately.".to_string());
-        lines.push("- Group all commits sharing the same ticket ID (e.g. TT-1234) into a single bullet describing the net result.".to_string());
         lines.push(
-            "- Preserve ticket/issue references (e.g. TT-1234, PROJ-567) if present in commit messages"
+            "- Treat the bullets above as the source material; prefer them over raw git metadata."
                 .to_string(),
         );
         lines.push(
-            "- Do NOT mention branch names, file counts, commit hashes, or other git metadata"
+            "- Do NOT mention branch names, commit hashes, file counts, or other git metadata."
                 .to_string(),
         );
-        lines.push("- Do NOT add a reflections section or subjective commentary".to_string());
+        lines.push(
+            "- Do NOT mention commit counts, clusters, workstreams, file areas, or internal pipeline mechanics."
+                .to_string(),
+        );
+        lines.push(
+            "- Preserve ticket/issue references if they appear in the candidates.".to_string(),
+        );
+        lines.push(
+            "- Do NOT turn ticket/issue references into Markdown links unless a real URL is provided."
+                .to_string(),
+        );
+        lines.push(
+            "- Reuse the bullet wording above unless a small wording cleanup makes it clearer."
+                .to_string(),
+        );
+        lines.push("- Write concise standup-ready bullets.".to_string());
     }
 
     lines.join("\n")
 }
 
+fn writer_candidate_line(outcome: &OutcomeCandidate) -> String {
+    match outcome.tone_policy {
+        crate::summary_pipeline::outcome::TonePolicy::PolishOk => outcome.probable_outcome.clone(),
+        crate::summary_pipeline::outcome::TonePolicy::StayLiteral => {
+            outcome.factual_headline.clone()
+        }
+        crate::summary_pipeline::outcome::TonePolicy::MentionUncertainty => {
+            format!("Worked on {}", outcome.factual_headline)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Event;
-    use crate::sem::{SemEntity, SemMetadata};
+    use crate::summary_pipeline::outcome::{OutcomeCandidate, TonePolicy};
 
     #[test]
     fn test_supported_providers_excludes_cursor() {
         assert_eq!(supported_providers(), &["anthropic", "openai", "ollama"]);
     }
 
-    fn make_event(
-        repo_name: &str,
-        message: &str,
-        branch: &str,
-        sem: Option<SemMetadata>,
-        diff: Option<serde_json::Value>,
-    ) -> Event {
-        let mut data = serde_json::json!({
-            "hash": "abc123",
-            "author": "Dev",
-            "message": message,
-            "branch": branch,
-            "files_changed": 2,
-            "insertions": 10,
-            "deletions": 5
-        });
-        if let Some(sem) = sem {
-            data["sem"] = serde_json::to_value(sem).unwrap();
-        }
-        if let Some(diff) = diff {
-            data["diff"] = diff;
-        }
+    #[test]
+    fn prompt_uses_outcome_candidates_and_concise_writer_rules() {
+        let prompt = build_prompt(
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-42 improved login validation".to_string(),
+                probable_outcome: "Improved login validation and fixed edge-case handling"
+                    .to_string(),
+                supporting_messages: vec![
+                    "TT-42 add login validation".to_string(),
+                    "TT-42 fix login edge case".to_string(),
+                ],
+                confidence: 4,
+                importance: 9,
+                tone_policy: TonePolicy::PolishOk,
+            }],
+            "2026-04-15",
+        );
 
-        Event {
-            id: None,
-            repo_path: "/tmp/repo".to_string(),
-            repo_name: Some(repo_name.to_string()),
-            event_type: "commit".to_string(),
-            timestamp: "2026-03-23T10:00:00Z".to_string(),
-            data,
-        }
-    }
+        let expected = [
+            "Here are grouped standup outcome candidates for 2026-04-15:",
+            "",
+            "Project: proj-a",
+            "  - Improved login validation and fixed edge-case handling",
+            "",
+            "Write a Dev Journal summary for standup use.",
+            "Rules:",
+            "- Start the document with: # Dev Journal — 2026-04-15",
+            "- Create exactly one ## section per project, using the exact project name above as the header. Do NOT invent additional sections or sub-sections.",
+            "- Keep every bullet inside its own project. Never move, copy, or infer work across project sections.",
+            "- Focus on OUTCOMES: what was shipped, fixed, or unblocked. Not the step-by-step process to get there.",
+            "- Treat the bullets above as the source material; prefer them over raw git metadata.",
+            "- Do NOT mention branch names, commit hashes, file counts, or other git metadata.",
+            "- Do NOT mention commit counts, clusters, workstreams, file areas, or internal pipeline mechanics.",
+            "- Preserve ticket/issue references if they appear in the candidates.",
+            "- Do NOT turn ticket/issue references into Markdown links unless a real URL is provided.",
+            "- Reuse the bullet wording above unless a small wording cleanup makes it clearer.",
+            "- Write concise standup-ready bullets.",
+        ]
+        .join("\n");
 
-    fn sample_sem() -> SemMetadata {
-        SemMetadata {
-            summary: "2 semantic changes across 1 files (1 added, 1 modified)".to_string(),
-            entities: vec![
-                SemEntity {
-                    name: "validate_token".to_string(),
-                    kind: "function".to_string(),
-                    change_type: "added".to_string(),
-                },
-                SemEntity {
-                    name: "authenticate_user".to_string(),
-                    kind: "function".to_string(),
-                    change_type: "modified".to_string(),
-                },
-            ],
-            change_types: vec!["added".to_string(), "modified".to_string()],
-            files: vec!["src/auth.rs".to_string()],
-        }
+        assert_eq!(prompt, expected);
     }
 
     #[test]
-    fn prompt_uses_project_sections_and_commit_metadata() {
+    fn prompt_groups_multiple_projects_in_sorted_order() {
         let prompt = build_prompt(
             &[
-                make_event(
-                    "proj-a",
-                    "Add auth token validation",
-                    "main",
-                    Some(sample_sem()),
-                    None,
-                ),
-                make_event(
-                    "proj-b",
-                    "Fix UI spacing",
-                    "feature/ui",
-                    None,
-                    Some(serde_json::json!({
-                        "stat_summary": "1 file changed, 4 insertions(+), 1 deletion(-)",
-                        "files": [{
-                            "path": "src/ui.rs",
-                            "status": "modified",
-                            "additions": 4,
-                            "deletions": 1
-                        }]
-                    })),
-                ),
+                OutcomeCandidate {
+                    project_name: "proj-b".to_string(),
+                    factual_headline: "TT-7 tightened release checks".to_string(),
+                    probable_outcome: "Tightened release checks".to_string(),
+                    supporting_messages: vec!["TT-7 tighten checks".to_string()],
+                    confidence: 80,
+                    importance: 1,
+                    tone_policy: TonePolicy::StayLiteral,
+                },
+                OutcomeCandidate {
+                    project_name: "proj-a".to_string(),
+                    factual_headline: "TT-42 improved login validation".to_string(),
+                    probable_outcome: "Improved login validation".to_string(),
+                    supporting_messages: vec!["TT-42 add login validation".to_string()],
+                    confidence: 90,
+                    importance: 2,
+                    tone_policy: TonePolicy::PolishOk,
+                },
             ],
-            "2026-03-23",
+            "2026-04-15 to 2026-04-16",
         );
 
         assert!(prompt.contains("Project: proj-a"));
         assert!(prompt.contains("Project: proj-b"));
-        assert!(prompt.contains("[abc123] (main) Add auth token validation"));
-        assert!(prompt.contains("semantic summary: 2 semantic changes across 1 files"));
-        assert!(prompt.contains("diff summary: 1 file changed, 4 insertions(+), 1 deletion(-)"));
-    }
-
-    #[test]
-    fn prompt_uses_multi_day_instructions_for_ranges() {
-        let prompt = build_prompt(
-            &[make_event("proj-a", "Add feature", "main", None, None)],
-            "2026-03-01 to 2026-03-07",
-        );
-
-        assert!(prompt.contains("Here are all git commits recorded from 2026-03-01 to 2026-03-07:"));
-        assert!(prompt.contains("Please write a multi-day summary"));
+        assert!(prompt.find("Project: proj-a").unwrap() < prompt.find("Project: proj-b").unwrap());
     }
 
     #[test]
     fn prompt_includes_custom_prompt_when_provided() {
         let prompt = build_prompt_with_custom(
-            &[make_event("proj-a", "Add feature", "main", None, None)],
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-1 add feature".to_string(),
+                probable_outcome: "Added feature".to_string(),
+                supporting_messages: vec!["TT-1 add feature".to_string()],
+                confidence: 80,
+                importance: 1,
+                tone_policy: TonePolicy::PolishOk,
+            }],
             "2026-03-23",
             Some("Custom instructions here."),
         );
 
         assert!(prompt.contains("Custom instructions here."));
         assert!(!prompt.contains("Rules:"));
+    }
+
+    #[test]
+    fn prompt_explicitly_bans_pipeline_mechanics_and_fake_ticket_links() {
+        let prompt = build_prompt(
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-42 inline LLM setup for summaries".to_string(),
+                probable_outcome: "Added inline LLM setup for summaries".to_string(),
+                supporting_messages: vec!["inline LLM setup for summaries".to_string()],
+                confidence: 80,
+                importance: 1,
+                tone_policy: TonePolicy::PolishOk,
+            }],
+            "2026-04-15",
+        );
+
+        assert!(prompt.contains("Do NOT mention commit counts, clusters, workstreams, file areas, or internal pipeline mechanics."));
+        assert!(prompt.contains("Do NOT turn ticket/issue references into Markdown links unless a real URL is provided."));
+    }
+
+    #[test]
+    fn prompt_does_not_label_bullets_as_candidate_lines() {
+        let prompt = build_prompt(
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-42 tightened login checks".to_string(),
+                probable_outcome: "Tightened login checks".to_string(),
+                supporting_messages: vec!["TT-42 tighten login checks".to_string()],
+                confidence: 80,
+                importance: 1,
+                tone_policy: TonePolicy::PolishOk,
+            }],
+            "2026-04-15",
+        );
+
+        assert!(prompt.contains("  - Tightened login checks"));
+        assert!(!prompt.contains("candidate line:"));
+    }
+
+    #[test]
+    fn prompt_does_not_expose_control_metadata_fields() {
+        let prompt = build_prompt(
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-42 tightened login checks".to_string(),
+                probable_outcome: "Improved login validation".to_string(),
+                supporting_messages: vec!["TT-42 improve login".to_string()],
+                confidence: 60,
+                importance: 8,
+                tone_policy: TonePolicy::StayLiteral,
+            }],
+            "2026-04-15",
+        );
+
+        assert!(!prompt.contains("confidence:"));
+        assert!(!prompt.contains("tone policy:"));
+        assert!(!prompt.contains("PolishOk"));
+        assert!(!prompt.contains("StayLiteral"));
+        assert!(!prompt.contains("MentionUncertainty"));
+    }
+
+    #[test]
+    fn prompt_does_not_include_supporting_evidence_lines() {
+        let prompt = build_prompt(
+            &[OutcomeCandidate {
+                project_name: "proj-a".to_string(),
+                factual_headline: "TT-42 tightened login checks".to_string(),
+                probable_outcome: "Improved login validation".to_string(),
+                supporting_messages: vec![
+                    "TT-42 improve login".to_string(),
+                    "TT-42 fix edge case".to_string(),
+                ],
+                confidence: 60,
+                importance: 8,
+                tone_policy: TonePolicy::StayLiteral,
+            }],
+            "2026-04-15",
+        );
+
+        assert!(!prompt.contains("supporting evidence:"));
+        assert!(!prompt.contains("supported by"));
     }
 }

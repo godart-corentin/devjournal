@@ -5,6 +5,7 @@ mod git_poller;
 mod llm;
 mod sem;
 mod summary;
+mod summary_pipeline;
 mod update;
 
 use anyhow::Result;
@@ -41,6 +42,9 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Print the internal summary pipeline report as JSON and skip LLM generation
+        #[arg(long)]
+        debug_pipeline: bool,
         /// Output format (markdown or json)
         #[arg(long, default_value = "markdown")]
         format: Format,
@@ -58,6 +62,9 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Print the internal summary pipeline report as JSON and skip LLM generation
+        #[arg(long)]
+        debug_pipeline: bool,
         /// Output format (markdown or json)
         #[arg(long, default_value = "markdown")]
         format: Format,
@@ -67,6 +74,9 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Print the internal summary pipeline report as JSON and skip LLM generation
+        #[arg(long)]
+        debug_pipeline: bool,
         /// Output format (markdown or json)
         #[arg(long, default_value = "markdown")]
         format: Format,
@@ -76,6 +86,9 @@ enum Commands {
         /// Bypass cache and regenerate even if events haven't changed
         #[arg(long)]
         force: bool,
+        /// Print the internal summary pipeline report as JSON and skip LLM generation
+        #[arg(long)]
+        debug_pipeline: bool,
         /// Output format (markdown or json)
         #[arg(long, default_value = "markdown")]
         format: Format,
@@ -225,19 +238,28 @@ fn sync_summary_window(window: &summary::SummaryWindow, config: &config::Config)
 fn print_summary_window(
     window: &summary::SummaryWindow,
     force: bool,
+    debug_pipeline: bool,
     format: Format,
 ) -> Result<()> {
-    let mut config = config::load()?;
+    let config = config::load()?;
     sync_summary_window(window, &config)?;
+    let conn = db::open()?;
+    let events = window.load_events(&conn)?;
+
+    if debug_pipeline {
+        let report = summary_pipeline::build_report(&events, &window.display_label())?;
+        println!(
+            "{}",
+            summary_pipeline::render::render_pipeline_debug_json(&report)?
+        );
+        return Ok(());
+    }
 
     match format {
         Format::Json => {
-            let conn = db::open()?;
-            let events = window.load_events(&conn)?;
             print_events_json(&events)?;
         }
         Format::Markdown => {
-            config::ensure_llm_configured_interactive(&mut config)?;
             let label = window.display_label();
             let message = format!("Generating summary for {label}");
             let success_message = format!("Generated summary for {label}.");
@@ -268,9 +290,13 @@ fn main() -> Result<()> {
         Some(Commands::Start) => daemon::start()?,
         Some(Commands::Stop) => daemon::stop()?,
 
-        Some(Commands::Today { force, format }) => {
+        Some(Commands::Today {
+            force,
+            debug_pipeline,
+            format,
+        }) => {
             let window = summary::SummaryWindow::for_date(summary::today());
-            print_summary_window(&window, force, format)?;
+            print_summary_window(&window, force, debug_pipeline, format)?;
         }
 
         Some(Commands::Summary {
@@ -278,20 +304,29 @@ fn main() -> Result<()> {
             from,
             to,
             force,
+            debug_pipeline,
             format,
         }) => {
             let window = summary::SummaryWindow::from_summary_args(date, from, to)?;
-            print_summary_window(&window, force, format)?;
+            print_summary_window(&window, force, debug_pipeline, format)?;
         }
 
-        Some(Commands::Week { force, format }) => {
+        Some(Commands::Week {
+            force,
+            debug_pipeline,
+            format,
+        }) => {
             let window = summary::SummaryWindow::rolling_days(7);
-            print_summary_window(&window, force, format)?;
+            print_summary_window(&window, force, debug_pipeline, format)?;
         }
 
-        Some(Commands::Month { force, format }) => {
+        Some(Commands::Month {
+            force,
+            debug_pipeline,
+            format,
+        }) => {
             let window = summary::SummaryWindow::rolling_days(30);
-            print_summary_window(&window, force, format)?;
+            print_summary_window(&window, force, debug_pipeline, format)?;
         }
 
         Some(Commands::Add { path, name }) => {

@@ -1,5 +1,5 @@
 use super::{build_prompt_with_custom, LlmBackend};
-use crate::db::Event;
+use crate::summary_pipeline::outcome::OutcomeCandidate;
 use anyhow::{Context, Result};
 use serde_json::json;
 
@@ -11,11 +11,11 @@ pub struct OpenAiBackend {
 impl LlmBackend for OpenAiBackend {
     fn summarize(
         &self,
-        events: &[Event],
+        outcomes: &[OutcomeCandidate],
         date: &str,
         custom_prompt: Option<&str>,
     ) -> Result<String> {
-        let prompt = build_prompt_with_custom(events, date, custom_prompt);
+        let prompt = build_prompt_with_custom(outcomes, date, custom_prompt);
         let body = json!({
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}]
