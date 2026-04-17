@@ -242,11 +242,7 @@ fn format_outcome_with_prefix(message: &str, prefix: &str, leading_verbs: &[&str
     } else {
         &stripped
     };
-    if body.eq_ignore_ascii_case(message) {
-        format!("{prefix} {body}")
-    } else {
-        format!("{prefix} {body}")
-    }
+    format!("{prefix} {body}")
 }
 
 fn format_maintenance_outcome(message: &str) -> String {

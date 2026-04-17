@@ -21,7 +21,7 @@ pub fn build_workstreams(evidence: &[CommitEvidence]) -> Vec<WorkstreamCandidate
     let mut clusters: Vec<WorkstreamCandidate> = Vec::new();
 
     let mut commits = evidence.iter().collect::<Vec<_>>();
-    commits.sort_by(|left, right| canonical_sort_key(left).cmp(&canonical_sort_key(right)));
+    commits.sort_by_key(|left| canonical_sort_key(left));
 
     for commit in commits {
         if let Some(existing) = clusters
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn clusters_commits_with_same_ticket_id() {
-        let workstreams = build_workstreams(&vec![
+        let workstreams = build_workstreams(&[
             evidence("TT-42 add login validation", &["TT-42"], &["src/auth"]),
             evidence("TT-42 fix login edge case", &["TT-42"], &["src/auth"]),
         ]);
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn does_not_merge_unrelated_workstreams() {
-        let workstreams = build_workstreams(&vec![
+        let workstreams = build_workstreams(&[
             evidence("TT-42 add login validation", &["TT-42"], &["src/auth"]),
             evidence("TT-90 tweak invoice export", &["TT-90"], &["src/billing"]),
         ]);
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn respects_same_project_guard() {
-        let workstreams = build_workstreams(&vec![
+        let workstreams = build_workstreams(&[
             CommitEvidence {
                 repo_name: "proj-a".to_string(),
                 timestamp: "2026-04-15T09:00:00+02:00".to_string(),
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn merges_file_area_only_commits_when_no_tickets_are_present() {
-        let workstreams = build_workstreams(&vec![
+        let workstreams = build_workstreams(&[
             evidence("refine login validation", &[], &["src/auth"]),
             evidence("tighten login guards", &[], &["src/auth"]),
         ]);
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn does_not_bridge_unrelated_ticketed_workstreams_through_file_area_overlap() {
-        let workstreams = build_workstreams(&vec![
+        let workstreams = build_workstreams(&[
             evidence("TT-42 add login validation", &["TT-42"], &["src/auth"]),
             evidence("cleanup login validation", &[], &["src/auth"]),
             evidence("TT-99 fix login edge case", &["TT-99"], &["src/auth"]),
