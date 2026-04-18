@@ -3,12 +3,12 @@
 </h1>
 
 <p align="center">
-  <strong>Turn your git activity into standup-ready daily notes.</strong>
+  <strong>Private standup summaries from your git history, local-first by default.</strong>
 </p>
 
 <p align="center">
-  A local-first CLI that watches your repositories, stores commit events in SQLite,
-  and generates clean work summaries in Markdown.
+  Turn your git activity into standup-ready daily notes while keeping commit history,
+  event storage, and optional summary generation on your machine.
 </p>
 
 <p align="center">
@@ -28,12 +28,13 @@
 
 ---
 
-`Devjournal` is a local-first CLI that watches one or more git repositories, stores commit events in a local SQLite database, and generates action-oriented work summaries in Markdown using Anthropic, OpenAI, or Ollama.
+`Devjournal` turns your git history into private, standup-ready daily notes. It watches one or more repositories, stores commit events in a local SQLite database, and generates action-oriented work summaries in Markdown using Anthropic, OpenAI, or Ollama.
 
 It also works **without** the background daemon: summary commands can sync the exact time window they need on demand.
 
 ## Table of contents
 
+- [Private by default](#private-by-default)
 - [Why Devjournal](#why-devjournal)
 - [Quick start](#quick-start)
 - [Example output](#example-output)
@@ -58,14 +59,26 @@ It also works **without** the background daemon: summary commands can sync the e
 - [License](#license)
 - [Maintainers](#maintainers)
 
+## Private by default
+
+`Devjournal`'s strongest default is trust:
+
+- commit events stay in a local SQLite database on your machine
+- `--format json` skips the LLM call entirely and returns recorded events directly
+- Ollama with a local `base_url` keeps summary generation on your machine
+- the optional daemon is local too, and summary commands still work without it
+
+If you want private standup summaries from your git history, `devjournal` is built for that workflow first.
+
 ## Why Devjournal
 
 Use `devjournal` if you want to:
 
-- turn commits into daily updates without writing notes by hand
+- turn commits into private daily updates without writing notes by hand
 - keep a searchable local history of what you worked on
 - generate summaries only when you need them
-- stay local-first, with optional fully local generation through Ollama
+- keep raw event storage local by default
+- keep summary generation local too when using Ollama
 - export raw structured data as JSON for scripts and integrations
 
 `devjournal` focuses on what changed in your projects rather than dumping raw git metadata, and it can enrich summaries further with optional semantic data from `sem` when available.
@@ -89,6 +102,8 @@ What happens here:
 - `devjournal today` syncs today’s commits before generating output
 - if no LLM is configured yet, `devjournal` starts inline setup and then continues automatically
 
+Prefer to stay fully local at first? Start with `devjournal today --format json` to inspect recorded events without making any LLM call, or switch to Ollama with a local `base_url` to keep summary generation on your machine too.
+
 ## Example output
 
 ```markdown
@@ -103,11 +118,12 @@ What happens here:
 - Improved Windows daemon shutdown handling and PID cleanup
 ```
 
-The generated output is grouped by project and written for humans, while JSON mode returns raw recorded events for automation.
+The generated output is grouped by project and written for humans, while JSON mode returns raw recorded events for automation without calling an LLM.
 
 ## What makes it different
 
-- **Local-first by default** — commit events are stored in a local SQLite database on your machine
+- **Private by default** — commit events are stored in a local SQLite database on your machine
+- **Local-only path available** — JSON mode avoids LLM calls, and Ollama can keep summary generation on-device
 - **Daemon optional** — background polling is useful, but summary commands still work without it
 - **Built for real updates** — output is grouped by project and focused on what changed
 - **High-signal standup summaries** — raw commits are compressed into grouped workstreams before summary data is sent to an LLM, keeping daily notes focused on outcomes instead of commit-by-commit narration
@@ -121,6 +137,8 @@ The generated output is grouped by project and written for humans, while JSON mo
 - Markdown summary commands send event data to your configured provider to generate summary text
 - `--format json` skips the LLM call entirely and returns recorded event objects directly
 - if you use Ollama with a local `base_url`, summary generation stays on your machine
+
+That makes `devjournal` a good fit when you want AI-assisted standup notes without adopting a cloud-first workflow.
 
 ## Install
 
@@ -279,7 +297,7 @@ devjournal summary --from 2026-03-01 --to 2026-03-07 --format json
 devjournal log --from 2026-03-01 --to 2026-03-07 --format json
 ```
 
-For summary-style commands, JSON mode skips the LLM call entirely and returns recorded event objects directly.
+For summary-style commands, JSON mode skips the LLM call entirely and returns recorded event objects directly from the local database flow.
 
 Summary commands still sync the requested time window before returning JSON output.
 
@@ -378,7 +396,7 @@ devjournal config
 
 ## No-LLM and local-only usage
 
-You do not need an LLM to collect and store activity.
+You do not need an LLM to collect and store activity, and you can inspect the full pipeline locally before deciding whether to generate Markdown summaries.
 
 - `devjournal add`, `sync`, `log`, and database-backed workflows still work without summary generation
 - `--format json` on summary-style commands skips the LLM call entirely
